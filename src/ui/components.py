@@ -1,537 +1,507 @@
 """
 Reusable UI Components for Crop Maturity & Health Assessment
-Provides styled cards, metrics, and layout elements
+Cards, stat tiles, image slots, sidebar, and page layouts.
+
+Image slots accept an optional `source` (file path, bytes, PIL image or
+numpy array). Once the MATLAB backend writes results (e.g. to outputs/),
+pass them into the matching slot and the placeholder is replaced.
 """
 
-import streamlit as st
+import io
+from html import escape
 from typing import Optional
 
+import streamlit as st
+from PIL import Image
 
-def metric_card(title: str, value: str, subtitle: str = "", icon: str = ""):
-    """
-    Render a modern metric card.
-    
-    Args:
-        title: Card title
-        value: Main value to display
-        subtitle: Optional subtitle text
-        icon: Optional emoji/icon
-    """
-    col = st.columns(1)[0]
-    with col:
-        card_html = f"""
-        <div class="modern-card">
-            <div class="card-header">
-                {f'<span style="font-size: 1.5rem; margin-right: 0.5rem;">{icon}</span>' if icon else ''}
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">{title}</h3>
-            </div>
-            <div style="font-size: 2rem; font-weight: 700; color: #16A34A; margin: 1rem 0; font-family: 'Space Grotesk', sans-serif;">
-                {value}
-            </div>
-            {f'<div class="card-subtitle">{subtitle}</div>' if subtitle else ''}
-        </div>
-        """
-        st.markdown(card_html, unsafe_allow_html=True)
+from .styles import section_label
+
+
+CROPS = ["Select crop", "Coffee", "Tomato", "Mango"]
+PAGES = [
+    "Dashboard",
+    "Image Processing",
+    "Feature Analysis",
+    "Maturity Assessment",
+    "Health Assessment",
+    "Final Report",
+]
+
+
+# ============================================================================
+# HELPERS
+# ============================================================================
+
+def _html(markup: str):
+    """Render HTML. Lines are stripped so Markdown never treats them as code."""
+    flat = "".join(line.strip() for line in markup.splitlines())
+    st.markdown(flat, unsafe_allow_html=True)
+
+
+def init_state():
+    """Create the session keys the UI relies on."""
+    defaults = {
+        "image_bytes": None,
+        "image_name": None,
+        "crop_type": "Select crop",
+        "analysis_requested": False,
+        "uploader_id": 0,
+        # Filled in later by the processing backend:
+        "results": {},
+    }
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
+
+    # Sync widget values early so the sidebar is never one step behind
+    if "_crop_select" in st.session_state:
+        st.session_state.crop_type = st.session_state["_crop_select"]
+
+    uploaded = st.session_state.get(f"uploader_{st.session_state.uploader_id}")
+    if uploaded is not None:
+        data = uploaded.getvalue()
+        if data != st.session_state.image_bytes:
+            st.session_state.image_bytes = data
+            st.session_state.image_name = uploaded.name
+            st.session_state.analysis_requested = False
+            st.session_state.results = {}
+
+
+def _clear_image():
+    st.session_state.image_bytes = None
+    st.session_state.image_name = None
+    st.session_state.analysis_requested = False
+    st.session_state.results = {}
+    st.session_state.uploader_id += 1
+
+
+def _request_analysis():
+    if st.session_state.image_bytes is not None and st.session_state.crop_type != "Select crop":
+        st.session_state.analysis_requested = True
+
+
+def _image_info() -> Optional[str]:
+    """Return 'W x H px · size' for the stored image."""
+    data = st.session_state.get("image_bytes")
+    if not data:
+        return None
+    try:
+        w, h = Image.open(io.BytesIO(data)).size
+        return f"{w} x {h} px · {len(data) / 1024:.0f} KB"
+    except Exception:
+        return f"{len(data) / 1024:.0f} KB"
+
+
+def _result(key: str) -> Optional[str]:
+    """Read a backend result value, or None if not available yet."""
+    return st.session_state.get("results", {}).get(key)
+
+
+# ============================================================================
+# BUILDING BLOCKS
+# ============================================================================
+
+def page_header(eyebrow: str, title: str, subtitle: str = "", small: bool = True):
+    """Animated page header. `title` may contain a <span class='cv-grad'>."""
+    size = " cv-title-sm" if small else ""
+    sub = f"<p class='cv-subtitle'>{subtitle}</p>" if subtitle else ""
+    _html(f"""
+        <div class="cv-eyebrow"><span class="cv-dot on"></span>{eyebrow}</div>
+        <h1 class="cv-title{size}">{title}</h1>
+        {sub}
+    """)
 
 
 def section_header(title: str, subtitle: str = "", label: str = ""):
-    """
-    Render a professional section header.
-    
-    Args:
-        title: Main heading
-        subtitle: Optional subtitle
-        label: Optional label above title
-    """
-    if label:
-        st.markdown(f'<div class="section-label">{label}</div>', unsafe_allow_html=True)
-    st.markdown(f"# {title}")
-    if subtitle:
-        st.markdown(f"<p style='color: #94A3B8; font-size: 0.95rem; margin-top: -0.75rem; line-height: 1.6;'>{subtitle}</p>", unsafe_allow_html=True)
+    """Backward-compatible wrapper around page_header."""
+    page_header(label or "CropVision", title, subtitle)
 
 
-def feature_card(number: str, title: str, value: str, description: str = ""):
-    """
-    Render a feature/capability card.
-    
-    Args:
-        number: Card number (01, 02, etc.)
-        title: Card title
-        value: Main value/metric
-        description: Optional description text
-    """
-    card_html = f"""
-    <div class="feature-card">
-        <div style="font-size: 0.85rem; font-weight: 700; color: #16A34A; margin-bottom: 0.75rem; letter-spacing: 0.5px; font-family: 'Space Grotesk', sans-serif;">
-            {number}
+def stat_tile(label: str, value: Optional[str], sub: str = "", tone: str = ""):
+    """Small metric tile. value=None shows a pending dash."""
+    shown = escape(value) if value else "&mdash;"
+    pending = "" if value else " pending"
+    tone_cls = f" tone-{tone}" if (tone and value) else ""
+    _html(f"""
+        <div class="cv-stat{tone_cls}">
+            <div class="cv-stat-label">{label}</div>
+            <div class="cv-stat-value{pending}">{shown}</div>
+            <div class="cv-stat-sub">{sub}</div>
         </div>
-        <div class="feature-card-title">{title}</div>
-        <div class="feature-card-value">{value}</div>
-        {f'<div class="feature-card-description">{description}</div>' if description else ''}
-    </div>
+    """)
+
+
+def image_slot(title: str, key: str, source=None, empty_text: str = "Awaiting output"):
     """
-    st.markdown(card_html, unsafe_allow_html=True)
-
-
-def render_pipeline():
-    """Render the complete DIP processing pipeline as numbered stage cards only."""
-    st.markdown("<div class='section-label'>DIP Processing Pipeline</div>", unsafe_allow_html=True)
-    
-    pipeline_stages = [
-        ("01", "", "Image Input", "Upload crop image"),
-        ("02", "", "Preprocessing", "Prepare image"),
-        ("03", "", "Segmentation", "Isolate regions"),
-        ("04", "", "Feature Extraction", "Analyze visual features"),
-        ("05", "", "Maturity + Health", "Assess crop condition"),
-        ("06", "", "Report", "Generate results"),
-    ]
-    
-    pipeline_html = '<div class="pipeline-container">'
-    
-    for number, icon, title, description in pipeline_stages:
-        pipeline_html += f'''
-        <div class="pipeline-step">
-            <div class="pipeline-step-box">
-                <div class="pipeline-step-icon">{icon}</div>
-                <div class="pipeline-step-number">{number}</div>
-                <div class="pipeline-step-title">{title}</div>
+    Card that shows an image, or an animated placeholder if source is None.
+    `key` must be unique on the page.
+    """
+    with st.container(key=f"card_{key}"):
+        tag = "<span class='cv-tag live'>Ready</span>" if source is not None else "<span class='cv-tag'>Pending</span>"
+        _html(f"""
+            <div class="cv-slot-head">
+                <span class="cv-slot-title">{title}</span>{tag}
             </div>
-        </div>
-        '''
-    
-    pipeline_html += '</div>'
-    
-    st.markdown(pipeline_html, unsafe_allow_html=True)
-
-
-def analysis_card():
-    """Render the main analysis card with upload and crop selection."""
-    st.markdown("<div class='section-label'>Analysis Workflow</div>", unsafe_allow_html=True)
-    
-    col1, col2 = st.columns([1, 1], gap="large")
-    
-    with col1:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Upload Crop Image</h3>
-            </div>
-            <p style="color: #94A3B8; margin-bottom: 1rem;">JPG / JPEG / PNG</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
-        
-        if uploaded_file:
-            st.image(uploaded_file, use_column_width=True, caption=f"{uploaded_file.name}")
-            st.markdown(f"""
-            <div style="margin-top: 0.75rem; padding: 1rem; background: #052E16; border-radius: 8px; border-left: 4px solid #16A34A; box-sizing: border-box;">
-                <div style="font-weight: 600; color: #86EFAC; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">Image Loaded</div>
-                <div style="font-size: 0.85rem; color: #16A34A; margin-top: 0.25rem; font-family: 'DM Sans', sans-serif;">Ready for analysis</div>
-            </div>
-            """, unsafe_allow_html=True)
+        """)
+        if source is not None:
+            st.image(source, width="stretch")
         else:
-            st.markdown("""
-            <div style="text-align: center; padding: 2.5rem 1rem; color: #94A3B8; box-sizing: border-box;">
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;"></div>
-                <div style="font-weight: 500; font-family: 'DM Sans', sans-serif;">Drag and drop or click to upload</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        return uploaded_file
-    
-    with col2:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Crop Selection</h3>
-            </div>
-            <p style="color: #94A3B8; margin-bottom: 1rem;">Select the crop type for analysis</p>
+            _html(f"""
+                <div class="cv-placeholder">
+                    <div class="cv-frame"></div>
+                    <div>{empty_text}</div>
+                </div>
+            """)
+
+
+def notice(title: str, body: str, kind: str = "warning"):
+    """Inline notice with a coloured bar. kind: warning | info."""
+    cls = "info" if kind == "info" else ""
+    _html(f"""
+        <div class="cv-notice {cls}">
+            <div class="cv-bar"></div>
+            <div><b>{title}</b>&nbsp; {body}</div>
         </div>
-        """, unsafe_allow_html=True)
-        
-        crop_type = st.selectbox(
-            "Crop Type",
-            ["Select crop", "Coffee", "Tomato", "Mango"],
-            label_visibility="collapsed"
+    """)
+
+
+def _chips():
+    """Status chips summarising the current session."""
+    has_img = st.session_state.image_bytes is not None
+    crop = st.session_state.crop_type
+    has_crop = crop != "Select crop"
+    queued = st.session_state.analysis_requested
+    _html(f"""
+        <div class="cv-chips">
+            <span class="cv-chip"><span class="cv-dot {'on' if has_img else ''}"></span>
+                {'Image loaded' if has_img else 'No image'}</span>
+            <span class="cv-chip"><span class="cv-dot {'on' if has_crop else ''}"></span>
+                {escape(crop) if has_crop else 'No crop selected'}</span>
+            <span class="cv-chip"><span class="cv-dot {'wait' if queued else ''}"></span>
+                {'Analysis queued' if queued else 'Idle'}</span>
+        </div>
+    """)
+
+
+# ============================================================================
+# SIDEBAR
+# ============================================================================
+
+def render_sidebar() -> str:
+    """Brand, navigation and session card. Returns the selected page."""
+    with st.sidebar:
+        _html("""
+            <div class="cv-brand">
+                <div class="cv-logo"></div>
+                <div>
+                    <div class="cv-brand-name">CropVision</div>
+                    <div class="cv-brand-sub">Maturity &amp; health</div>
+                </div>
+            </div>
+            <div class="cv-side-label">Navigate</div>
+        """)
+
+        page = st.radio(
+            "Navigation",
+            PAGES,
+            label_visibility="collapsed",
+            key="main_nav",
         )
-        
-        st.markdown(f"""
-        <div style="margin-top: 1rem; padding: 1rem; background: #0F172A; border-radius: 8px; border: 1px solid #334155; box-sizing: border-box;">
-            <div style="font-size: 0.85rem; color: #94A3B8; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 0.5rem; font-family: 'DM Sans', sans-serif;">Selected Crop</div>
-            <div style="font-size: 1.25rem; font-weight: 700; color: #16A34A; font-family: 'Space Grotesk', sans-serif;">{crop_type}</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        return crop_type
 
-
-def render_quick_overview():
-    """Render quick overview capability cards."""
-    st.markdown("<div class='section-label'>Key Capabilities</div>", unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns(3, gap="medium")
-    
-    with col1:
-        feature_card("01", "Image Processing", "Preprocessing", "Noise reduction & enhancement")
-    
-    with col2:
-        feature_card("02", "Segmentation", "Region Analysis", "Identify crop areas")
-    
-    with col3:
-        feature_card("03", "Feature Extraction", "Data Analysis", "Compute quantitative metrics")
-    
-    col4, col5, col6 = st.columns(3, gap="medium")
-    
-    with col4:
-        feature_card("04", "Maturity Estimation", "Development Stage", "Growth prediction model")
-    
-    with col5:
-        feature_card("05", "Health Detection", "Abnormality Scan", "Identify visible defects")
-    
-    with col6:
-        feature_card("06", "Comprehensive Report", "Documentation", "Export & analysis summary")
-
-
-def render_project_info():
-    """Render project information and technical details."""
-    st.markdown("<div class='section-label'>About This System</div>", unsafe_allow_html=True)
-    
-    col1, col2 = st.columns([1, 1], gap="large")
-    
-    with col1:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Purpose</h3>
+        name = st.session_state.image_name or "None"
+        crop = st.session_state.crop_type
+        crop = crop if crop != "Select crop" else "None"
+        status = "Queued" if st.session_state.analysis_requested else "Idle"
+        _html(f"""
+            <div class="cv-session">
+                <div class="cv-side-label" style="margin-left:0">Session</div>
+                <div class="cv-session-row"><span>Image</span><b>{escape(name)}</b></div>
+                <div class="cv-session-row"><span>Crop</span><b>{escape(crop)}</b></div>
+                <div class="cv-session-row"><span>Status</span><b>{status}</b></div>
             </div>
-            <p style="color: #94A3B8; line-height: 1.7; font-family: 'DM Sans', sans-serif;">
-                This Digital Image Processing system applies computer vision techniques to analyze crop images and estimate maturity stages while identifying visible health abnormalities.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Technology</h3>
-            </div>
-            <p style="color: #94A3B8; line-height: 1.7; font-family: 'DM Sans', sans-serif;">
-                Built with Python, Streamlit, and image processing libraries. Implements DIP pipeline stages for preprocessing, segmentation, and feature extraction.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+        """)
+    return page
 
+
+# ============================================================================
+# DASHBOARD
+# ============================================================================
+
+def _upload_card():
+    """Upload card. Image bytes persist in session state across pages."""
+    with st.container(key="card_upload"):
+        _html("""
+            <div class="cv-card-head">
+                <span class="cv-step">01</span>
+                <span class="cv-card-title">Upload image</span>
+                <span class="cv-card-meta">JPG · JPEG · PNG</span>
+            </div>
+        """)
+        st.file_uploader(
+            "Crop image",
+            type=["jpg", "jpeg", "png"],
+            label_visibility="collapsed",
+            key=f"uploader_{st.session_state.uploader_id}",
+        )
+        # (stored into session state by init_state on each run)
+
+        if st.session_state.image_bytes is not None:
+            st.image(st.session_state.image_bytes, width="stretch")
+            info_col, btn_col = st.columns([3, 1], vertical_alignment="center")
+            with info_col:
+                _html(f"""
+                    <div class="cv-stat-sub">
+                        <b style="color:var(--cv-text)">{escape(st.session_state.image_name or '')}</b><br>
+                        {_image_info() or ''}
+                    </div>
+                """)
+            with btn_col:
+                st.button("Clear", key="clear_img", type="tertiary", on_click=_clear_image)
+
+
+def _configure_card():
+    """Crop selection, readiness checklist and the Analyze button."""
+    with st.container(key="card_config"):
+        _html("""
+            <div class="cv-card-head">
+                <span class="cv-step">02</span>
+                <span class="cv-card-title">Configure and run</span>
+            </div>
+        """)
+
+        # Mirror into a widget key so the choice survives page switches
+        if "_crop_select" not in st.session_state:
+            st.session_state["_crop_select"] = st.session_state.crop_type
+        crop = st.selectbox("Crop type", CROPS, key="_crop_select")
+        st.session_state.crop_type = crop
+
+        has_img = st.session_state.image_bytes is not None
+        has_crop = crop != "Select crop"
+        _html(f"""
+            <div class="cv-checklist">
+                <div class="cv-check {'done' if has_img else ''}"><i></i>Image uploaded</div>
+                <div class="cv-check {'done' if has_crop else ''}"><i></i>Crop type selected</div>
+            </div>
+        """)
+
+        st.write("")
+        if st.button("Analyze image", key="analyze_btn", type="primary", width="stretch",
+                     on_click=_request_analysis):
+            if has_img and has_crop:
+                st.toast("Analysis queued. Processing backend not connected yet.")
+            elif not has_img:
+                st.warning("Upload an image first.")
+            else:
+                st.warning("Select a crop type.")
+
+
+def dashboard_page():
+    """Main dashboard: upload, configure, quick results."""
+    page_header(
+        "Digital image processing",
+        "Crop maturity<br><span class='cv-grad'>&amp; health</span>",
+        "Upload a still image, choose the crop, and run the assessment.",
+        small=False,
+    )
+    _chips()
+
+    left, right = st.columns([1.35, 1], gap="large")
+    with left:
+        _upload_card()
+    with right:
+        _configure_card()
+
+    section_label("Results at a glance")
+    c1, c2, c3, c4 = st.columns(4, gap="medium")
+    crop = st.session_state.crop_type
+    with c1:
+        stat_tile("Crop", crop if crop != "Select crop" else None, "Selected type", "accent")
+    with c2:
+        stat_tile("Maturity", _result("maturity"), "Not ready · Ready · Overripe", "accent")
+    with c3:
+        stat_tile("Health", _result("health"), "Visible condition", "warning")
+    with c4:
+        stat_tile("Affected area", _result("affected_area"), "Of crop region", "danger")
+
+
+# ============================================================================
+# OTHER PAGES
+# ============================================================================
 
 def image_processing_page():
-    """Render the Image Processing page."""
-    section_header(
-        "Image Processing",
-        "Preprocessing and enhancement techniques for crop analysis",
-        "IMAGE PROCESSING • PREPROCESSING"
+    """Original image and preprocessing outputs."""
+    page_header(
+        "Preprocessing",
+        "Image <span class='cv-grad'>processing</span>",
     )
-    
-    col1, col2 = st.columns([1, 1], gap="large")
-    
-    with col1:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Preprocessing Steps</h3>
-            </div>
-            <div style="margin-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
-                <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; border-left: 3px solid #16A34A; box-sizing: border-box;">
-                    <div style="font-weight: 600; color: #86EFAC; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">Noise Reduction</div>
-                </div>
-                <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; border-left: 3px solid #16A34A; box-sizing: border-box;">
-                    <div style="font-weight: 600; color: #86EFAC; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">Contrast Enhancement</div>
-                </div>
-                <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; border-left: 3px solid #16A34A; box-sizing: border-box;">
-                    <div style="font-weight: 600; color: #86EFAC; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">Color Space Conversion</div>
-                </div>
-                <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; border-left: 3px solid #16A34A; box-sizing: border-box;">
-                    <div style="font-weight: 600; color: #86EFAC; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">Histogram Equalization</div>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Processing Results</h3>
-            </div>
-            <div style="margin-top: 1rem; text-align: center; padding: 2rem; background: #0F172A; border-radius: 8px; color: #94A3B8; box-sizing: border-box;">
-                <div style="font-size: 1.5rem; margin-bottom: 0.5rem;"></div>
-                <div style="font-weight: 500; font-family: 'DM Sans', sans-serif;">Awaiting image analysis</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    _chips()
+
+    c1, c2 = st.columns(2, gap="medium")
+    with c1:
+        image_slot("Original", "ip_original", st.session_state.image_bytes, "Upload an image on the dashboard")
+    with c2:
+        image_slot("Denoised", "ip_denoised")
+    c3, c4 = st.columns(2, gap="medium")
+    with c3:
+        image_slot("Contrast enhanced", "ip_contrast")
+    with c4:
+        image_slot("Colour space", "ip_colorspace")
 
 
 def feature_analysis_page():
-    """Render the Feature Analysis page."""
-    section_header(
-        "Feature Analysis",
-        "Quantitative metrics and feature extraction results",
-        "FEATURE ANALYSIS • QUANTIFICATION"
+    """Extracted features and segmentation outputs."""
+    page_header(
+        "Segmentation and features",
+        "Feature <span class='cv-grad'>analysis</span>",
     )
-    
-    col1, col2 = st.columns([1, 1], gap="large")
-    
-    with col1:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Extracted Features</h3>
-            </div>
-            <div style="margin-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
-                <div>
-                    <div style="font-weight: 600; color: #E2E8F0; font-size: 0.9rem; margin-bottom: 0.25rem; font-family: 'DM Sans', sans-serif;">Color Moments</div>
-                    <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; color: #94A3B8; font-size: 0.9rem; font-family: 'DM Sans', sans-serif; box-sizing: border-box;">Awaiting analysis</div>
-                </div>
-                <div>
-                    <div style="font-weight: 600; color: #E2E8F0; font-size: 0.9rem; margin-bottom: 0.25rem; font-family: 'DM Sans', sans-serif;">Texture Analysis</div>
-                    <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; color: #94A3B8; font-size: 0.9rem; font-family: 'DM Sans', sans-serif; box-sizing: border-box;">Awaiting analysis</div>
-                </div>
-                <div>
-                    <div style="font-weight: 600; color: #E2E8F0; font-size: 0.9rem; margin-bottom: 0.25rem; font-family: 'DM Sans', sans-serif;">Shape Descriptors</div>
-                    <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; color: #94A3B8; font-size: 0.9rem; font-family: 'DM Sans', sans-serif; box-sizing: border-box;">Awaiting analysis</div>
-                </div>
-                <div>
-                    <div style="font-weight: 600; color: #E2E8F0; font-size: 0.9rem; margin-bottom: 0.25rem; font-family: 'DM Sans', sans-serif;">Edge Detection</div>
-                    <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; color: #94A3B8; font-size: 0.9rem; font-family: 'DM Sans', sans-serif; box-sizing: border-box;">Awaiting analysis</div>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Feature Vector</h3>
-            </div>
-            <div style="margin-top: 1rem; text-align: center; padding: 2rem; background: #0F172A; border-radius: 8px; color: #94A3B8; box-sizing: border-box;">
-                <div style="font-size: 1.5rem; margin-bottom: 0.5rem;"></div>
-                <div style="font-weight: 500; font-family: 'DM Sans', sans-serif;">Awaiting image analysis</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    _chips()
+
+    c1, c2, c3, c4 = st.columns(4, gap="medium")
+    with c1:
+        stat_tile("Colour", _result("color_features"), "Colour moments")
+    with c2:
+        stat_tile("Texture", _result("texture_features"), "Texture analysis")
+    with c3:
+        stat_tile("Shape", _result("shape_features"), "Shape descriptors")
+    with c4:
+        stat_tile("Edges", _result("edge_features"), "Edge detection")
+
+    section_label("Visual outputs")
+    c5, c6 = st.columns(2, gap="medium")
+    with c5:
+        image_slot("Segmentation mask", "fa_mask")
+    with c6:
+        image_slot("Edge map", "fa_edges")
 
 
 def maturity_assessment_page():
-    """Render the Maturity Assessment page."""
-    section_header(
-        "Maturity Assessment",
-        "Estimate development stage and ripeness level",
-        "MATURITY ANALYSIS • GROWTH STAGE"
+    """Maturity stage scale and evidence."""
+    page_header(
+        "Maturity",
+        "Maturity <span class='cv-grad'>assessment</span>",
     )
-    
-    col1, col2, col3 = st.columns(3, gap="medium")
-    
-    with col1:
-        st.markdown("""
-        <div class="modern-card" style="border-left: 4px solid #94A3B8; background: rgba(148, 163, 184, 0.05);">
-            <div style="font-weight: 700; color: #94A3B8; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.5rem; font-family: 'DM Sans', sans-serif;">Status</div>
-            <div style="font-size: 2rem; font-weight: 700; color: #94A3B8; margin: 0.75rem 0; font-family: 'Space Grotesk', sans-serif;">UNRIPE</div>
-            <p class="card-subtitle">Early development stage</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="modern-card" style="border-left: 4px solid #F59E0B; background: rgba(245, 158, 11, 0.08);">
-            <div style="font-weight: 700; color: #D97706; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.5rem; font-family: 'DM Sans', sans-serif;">Status</div>
-            <div style="font-size: 2rem; font-weight: 700; color: #D97706; margin: 0.75rem 0; font-family: 'Space Grotesk', sans-serif;">READY</div>
-            <p class="card-subtitle">Optimal harvest window</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown("""
-        <div class="modern-card" style="border-left: 4px solid #EF4444; background: rgba(239, 68, 68, 0.08);">
-            <div style="font-weight: 700; color: #EF4444; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.5rem; font-family: 'DM Sans', sans-serif;">Status</div>
-            <div style="font-size: 2rem; font-weight: 700; color: #DC2626; margin: 0.75rem 0; font-family: 'Space Grotesk', sans-serif;">OVERRIPE</div>
-            <p class="card-subtitle">Recommend immediate harvest</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("<div class='section-label' style='margin-top: 2rem;'>Analysis Results</div>", unsafe_allow_html=True)
-    
-    tab1, tab2, tab3 = st.tabs(["Overview", "Visual Evidence", "Details"])
-    
+    _chips()
+
+    current = _result("maturity")
+    stages = [
+        ("s-not", "Not ready", "Early development"),
+        ("s-ready", "Ready", "Harvest window"),
+        ("s-over", "Overripe", "Past optimal window"),
+    ]
+    cards = "".join(
+        f"""<div class="cv-stage {cls} {'active' if current == name else ''}">
+                <div class="cv-stage-bar"></div>
+                <div class="cv-stage-name">{name}</div>
+                <div class="cv-stage-hint">{hint}</div>
+            </div>"""
+        for cls, name, hint in stages
+    )
+    _html(f"<div class='cv-scale'>{cards}</div>")
+
+    section_label("Results")
+    tab1, tab2, tab3 = st.tabs(["Overview", "Visual evidence", "Details"])
     with tab1:
-        st.markdown("""
-        <div class="modern-card">
-            <div style="text-align: center; padding: 2rem; color: #94A3B8; box-sizing: border-box;">
-                <div style="font-size: 2rem; margin-bottom: 1rem;"></div>
-                <div style="font-weight: 500; font-family: 'DM Sans', sans-serif;">Awaiting image analysis</div>
-                <p style="font-family: 'DM Sans', sans-serif;">Upload an image and click "Analyze Image" to begin</p>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
+        c1, c2, c3 = st.columns(3, gap="medium")
+        with c1:
+            stat_tile("Stage", current, "Assessed maturity", "accent")
+        with c2:
+            stat_tile("Crop", _result("crop"), "Analysed crop")
+        with c3:
+            stat_tile("Evidence", _result("maturity_evidence"), "Key measurement")
     with tab2:
-        st.markdown("""
-        <div class="modern-card">
-            <div style="text-align: center; padding: 2rem; color: #94A3B8; box-sizing: border-box;">
-                <div style="font-size: 2rem; margin-bottom: 1rem;"></div>
-                <div style="font-weight: 500; font-family: 'DM Sans', sans-serif;">Awaiting image analysis</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
+        c1, c2 = st.columns(2, gap="medium")
+        with c1:
+            image_slot("Input", "mt_input", st.session_state.image_bytes, "Upload an image on the dashboard")
+        with c2:
+            image_slot("Ripeness map", "mt_map")
     with tab3:
-        st.markdown("""
-        <div class="modern-card">
-            <div style="text-align: center; padding: 2rem; color: #94A3B8; box-sizing: border-box;">
-                <div style="font-size: 2rem; margin-bottom: 1rem;"></div>
-                <div style="font-weight: 500; font-family: 'DM Sans', sans-serif;">Awaiting image analysis</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        with st.container(key="card_mt_details"):
+            _html("""
+                <div class="cv-slot-head"><span class="cv-slot-title">Measurements</span>
+                <span class="cv-tag">Pending</span></div>
+                <div class="cv-stat-sub">Detailed measurements appear here after analysis.</div>
+            """)
 
 
 def health_assessment_page():
-    """Render the Health Assessment page."""
-    section_header(
-        "Health Assessment",
-        "Detect visible abnormalities and health indicators",
-        "HEALTH ANALYSIS • ABNORMALITY DETECTION"
+    """Visible abnormality results."""
+    page_header(
+        "Health",
+        "Health <span class='cv-grad'>assessment</span>",
     )
-    
-    col1, col2 = st.columns([1, 1], gap="large")
-    
-    with col1:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Visible Assessment</h3>
-            </div>
-            <div style="margin-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
-                <div>
-                    <div style="font-weight: 600; color: #E2E8F0; font-size: 0.9rem; margin-bottom: 0.25rem; font-family: 'DM Sans', sans-serif;">Detected Condition</div>
-                    <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; color: #94A3B8; font-size: 0.9rem; font-family: 'DM Sans', sans-serif; box-sizing: border-box;">Awaiting analysis</div>
-                </div>
-                <div>
-                    <div style="font-weight: 600; color: #E2E8F0; font-size: 0.9rem; margin-bottom: 0.25rem; font-family: 'DM Sans', sans-serif;">Likelihood</div>
-                    <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; color: #94A3B8; font-size: 0.9rem; font-family: 'DM Sans', sans-serif; box-sizing: border-box;">—</div>
-                </div>
-                <div>
-                    <div style="font-weight: 600; color: #E2E8F0; font-size: 0.9rem; margin-bottom: 0.25rem; font-family: 'DM Sans', sans-serif;">Affected Area</div>
-                    <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; color: #94A3B8; font-size: 0.9rem; font-family: 'DM Sans', sans-serif; box-sizing: border-box;">—</div>
-                </div>
-                <div>
-                    <div style="font-weight: 600; color: #E2E8F0; font-size: 0.9rem; margin-bottom: 0.25rem; font-family: 'DM Sans', sans-serif;">Severity</div>
-                    <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; color: #94A3B8; font-size: 0.9rem; font-family: 'DM Sans', sans-serif; box-sizing: border-box;">—</div>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Detected Regions</h3>
-            </div>
-            <div style="margin-top: 1rem; text-align: center; padding: 2rem; background: #0F172A; border-radius: 8px; color: #94A3B8; box-sizing: border-box;">
-                <div style="font-size: 1.5rem; margin-bottom: 0.5rem;"></div>
-                <div style="font-weight: 500; font-family: 'DM Sans', sans-serif;">Awaiting analysis</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div style="margin-top: 2rem; padding: 1.25rem; background: #451A03; border-left: 4px solid #F59E0B; border-radius: 8px; box-sizing: border-box;">
-        <div style="font-weight: 600; color: #FDE68A; margin-bottom: 0.5rem; font-family: 'Space Grotesk', sans-serif;">Important Disclaimer</div>
-        <p style="margin: 0; color: #FBBF24; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">
-            This system is intended for image-based assessment of visible abnormalities and does not provide medical, pesticide, or treatment recommendations. Results should be validated by agricultural experts.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    _chips()
+
+    c1, c2, c3 = st.columns(3, gap="medium")
+    with c1:
+        stat_tile("Condition", _result("health"), "Detected condition", "warning")
+    with c2:
+        stat_tile("Affected area", _result("affected_area"), "Of crop region", "danger")
+    with c3:
+        stat_tile("Severity", _result("severity"), "Visible extent")
+
+    section_label("Detected regions")
+    c4, c5 = st.columns(2, gap="medium")
+    with c4:
+        image_slot("Abnormal region mask", "ha_mask")
+    with c5:
+        image_slot("Overlay", "ha_overlay")
+
+    notice(
+        "Disclaimer",
+        "Image-based assessment of visible characteristics only. No pesticide, "
+        "medication, or treatment recommendations. Validate results with an expert.",
+    )
 
 
 def final_report_page():
-    """Render the Final Report page."""
-    section_header(
-        "Analysis Report",
-        "Complete assessment summary and export options",
-        "FINAL REPORT • DOCUMENTATION"
+    """Summary of all results and export actions."""
+    page_header(
+        "Report",
+        "Analysis <span class='cv-grad'>report</span>",
     )
-    
-    col1, col2 = st.columns([1, 1], gap="large")
-    
-    with col1:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Report Contents</h3>
+    _chips()
+
+    crop = st.session_state.crop_type
+    rows = [
+        ("Input image", st.session_state.image_name),
+        ("Crop", crop if crop != "Select crop" else None),
+        ("Maturity", _result("maturity")),
+        ("Health", _result("health")),
+        ("Affected area", _result("affected_area")),
+        ("Severity", _result("severity")),
+    ]
+    row_html = "".join(
+        f"<div class='cv-row'><span>{label}</span>"
+        f"<b class='{'' if value else 'pending'}'>{escape(value) if value else 'Pending'}</b></div>"
+        for label, value in rows
+    )
+
+    left, right = st.columns([1.5, 1], gap="large")
+    with left:
+        _html(f"""
+            <div class="cv-card">
+                <div class="cv-card-head"><span class="cv-card-title">Summary</span></div>
+                <div class="cv-rows">{row_html}</div>
             </div>
-            <div style="margin-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
-                <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; border-left: 3px solid #16A34A; box-sizing: border-box;">
-                    <div style="font-weight: 600; color: #86EFAC; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">Input Image</div>
-                </div>
-                <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; border-left: 3px solid #16A34A; box-sizing: border-box;">
-                    <div style="font-weight: 600; color: #86EFAC; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">Crop Information</div>
-                </div>
-                <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; border-left: 3px solid #16A34A; box-sizing: border-box;">
-                    <div style="font-weight: 600; color: #86EFAC; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">Maturity Assessment</div>
-                </div>
-                <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; border-left: 3px solid #16A34A; box-sizing: border-box;">
-                    <div style="font-weight: 600; color: #86EFAC; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">Health Assessment</div>
-                </div>
-                <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; border-left: 3px solid #16A34A; box-sizing: border-box;">
-                    <div style="font-weight: 600; color: #86EFAC; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">Affected Area Estimation</div>
-                </div>
-                <div style="padding: 0.75rem; background: #0F172A; border-radius: 6px; border-left: 3px solid #16A34A; box-sizing: border-box;">
-                    <div style="font-weight: 600; color: #86EFAC; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">Visual Evidence</div>
-                </div>
-            </div>
+        """)
+    with right:
+        with st.container(key="card_export"):
+            _html("""
+                <div class="cv-card-head"><span class="cv-card-title">Export</span></div>
+            """)
+            done = bool(st.session_state.results)
+            st.button("Download report", key="download_btn", disabled=not done, width="stretch")
+            st.button("Export results", key="export_btn", disabled=not done, width="stretch")
+            _html("<div class='cv-stat-sub' style='margin-top:0.5rem'>Available after analysis completes.</div>")
+
+        section_label("Input")
+        image_slot("Input image", "rp_input", st.session_state.image_bytes, "No image uploaded")
+
+
+def render_footer():
+    """Small footer line."""
+    _html("""
+        <div class="cv-footer">
+            <span>CropVision · Crop maturity &amp; health assessment</span>
+            <span>Digital Image Processing mini project</span>
         </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="modern-card">
-            <div class="card-header">
-                <span style="font-size: 1.5rem;"></span>
-                <h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif;">Export Options</h3>
-            </div>
-            <div style="margin-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
-        """, unsafe_allow_html=True)
-        
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.button("Download Report", key="download_btn", disabled=True, use_container_width=True)
-        with col_b:
-            st.button(" Export Results", key="export_btn", disabled=True, use_container_width=True)
-        
-        st.markdown("""
-            </div>
-            <p class="card-subtitle" style="margin-top: 1rem;">Buttons enabled after analysis completes</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div style="margin-top: 2rem; padding: 1.25rem; background: #052E16; border-left: 4px solid #16A34A; border-radius: 8px; box-sizing: border-box;">
-        <div style="font-weight: 600; color: #86EFAC; margin-bottom: 0.5rem; font-family: 'Space Grotesk', sans-serif;">Report Status</div>
-        <p style="margin: 0; color: #16A34A; font-size: 0.9rem; font-family: 'DM Sans', sans-serif;">
-            No analysis performed yet. Upload an image and select a crop type to generate a comprehensive report.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    """)

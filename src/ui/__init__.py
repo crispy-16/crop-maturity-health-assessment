@@ -3,15 +3,17 @@ UI Module for Crop Maturity & Health Assessment
 Provides styles, components, and page layouts
 """
 
-from .styles import load_global_css, section_divider, section_label, status_badge
+from .styles import THEME, load_global_css, section_divider, section_label, status_badge
 from .components import (
-    metric_card,
+    init_state,
+    render_sidebar,
+    render_footer,
+    page_header,
     section_header,
-    feature_card,
-    render_pipeline,
-    analysis_card,
-    render_quick_overview,
-    render_project_info,
+    stat_tile,
+    image_slot,
+    notice,
+    dashboard_page,
     image_processing_page,
     feature_analysis_page,
     maturity_assessment_page,
@@ -20,17 +22,20 @@ from .components import (
 )
 
 __all__ = [
+    "THEME",
     "load_global_css",
     "section_divider",
     "section_label",
     "status_badge",
-    "metric_card",
+    "init_state",
+    "render_sidebar",
+    "render_footer",
+    "page_header",
     "section_header",
-    "feature_card",
-    "render_pipeline",
-    "analysis_card",
-    "render_quick_overview",
-    "render_project_info",
+    "stat_tile",
+    "image_slot",
+    "notice",
+    "dashboard_page",
     "image_processing_page",
     "feature_analysis_page",
     "maturity_assessment_page",
