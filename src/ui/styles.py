@@ -706,7 +706,7 @@ div[class*="st-key-card_"]:hover::before {
     background: var(--cv-border-strong);
 }
 
-/* Real images: rounded + scan line sweep */
+/* Real images: rounded */
 div[class*="st-key-card_"] [data-testid="stImage"],
 div[class*="st-key-card_"] [data-testid="stImageContainer"] {
     position: relative;
@@ -717,17 +717,6 @@ div[class*="st-key-card_"] [data-testid="stImageContainer"] {
 div[class*="st-key-card_"] [data-testid="stImage"] img {
     border-radius: 12px;
     animation: cvReveal 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-
-div[class*="st-key-card_"] [data-testid="stImage"]::after {
-    content: "";
-    position: absolute;
-    left: 0; right: 0; top: 0;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, var(--cv-accent), var(--cv-accent-2), transparent);
-    box-shadow: 0 0 16px 2px rgba(45, 212, 191, 0.55);
-    animation: cvScan 3.2s ease-in-out infinite;
-    pointer-events: none;
 }
 
 [data-testid="stImageCaption"] {

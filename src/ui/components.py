@@ -20,6 +20,19 @@ from .styles import section_label
 
 
 CROPS = ["Select crop", "Coffee", "Tomato", "Mango"]
+# Stages of the MATLAB chain (crop_pipeline.m), shown as placeholders
+# before the first analysis. Each stage takes the previous one's output.
+PIPELINE_STAGES = [
+    "Original",
+    "Resized",
+    "Denoised",
+    "Contrast enhanced",
+    "K-means clusters",
+    "Initial mask",
+    "Active contour",
+    "Final mask",
+    "Segmented fruit",
+]
 PAGES = [
     "Dashboard",
     "Image Processing",
@@ -112,6 +125,7 @@ def _summarise(raw: dict) -> dict:
     f = raw["features"]
     res = {
         "ok": raw["ok"],
+        "stages": raw["stages"],
         "images": raw["images"],
         "features": f,
         "output_dir": raw["output_dir"],
@@ -226,6 +240,33 @@ def image_slot(title: str, key: str, source=None, empty_text: str = "Awaiting ou
                     <div>{empty_text}</div>
                 </div>
             """)
+
+
+def stage_slot(number: int, title: str, key: str, source=None,
+               operation: str = "", input_title: str = ""):
+    """Image card for one pipeline stage: step number, image, what was done."""
+    with st.container(key=f"card_{key}"):
+        tag = "<span class='cv-tag live'>Ready</span>" if source is not None else "<span class='cv-tag'>Pending</span>"
+        _html(f"""
+            <div class="cv-slot-head">
+                <span style="display:flex;align-items:center;gap:0.6rem">
+                    <span class="cv-step">{number:02d}</span>
+                    <span class="cv-slot-title">{escape(title)}</span>
+                </span>{tag}
+            </div>
+        """)
+        if source is not None:
+            st.image(source, width="stretch")
+        else:
+            _html("""
+                <div class="cv-placeholder">
+                    <div class="cv-frame"></div>
+                    <div>Awaiting output</div>
+                </div>
+            """)
+        if operation:
+            src = f"<br>Input: {escape(input_title)}" if input_title else ""
+            _html(f"<div class='cv-stat-sub' style='margin-top:0.6rem'>{escape(operation)}{src}</div>")
 
 
 def notice(title: str, body: str, kind: str = "warning"):
@@ -407,23 +448,34 @@ def dashboard_page():
 # ============================================================================
 
 def image_processing_page():
-    """Original image and preprocessing outputs."""
+    """Every image the MATLAB chain passes on, in order."""
     page_header(
-        "Preprocessing",
-        "Image <span class='cv-grad'>processing</span>",
+        "Preprocessing and segmentation",
+        "Processing <span class='cv-grad'>pipeline</span>",
+        "Each stage takes the image produced by the stage before it.",
     )
     _chips()
 
-    c1, c2 = st.columns(2, gap="medium")
-    with c1:
-        image_slot("Original", "ip_original", st.session_state.image_bytes, "Upload an image on the dashboard")
-    with c2:
-        image_slot("Denoised", "ip_denoised", _output("denoised"))
-    c3, c4 = st.columns(2, gap="medium")
-    with c3:
-        image_slot("Contrast enhanced", "ip_contrast", _output("enhanced"))
-    with c4:
-        image_slot("Colour space (L* a* b*)", "ip_colorspace", _output("colorspace"))
+    stages = _result("stages") or []
+    if stages:
+        titles = {s["key"]: s["title"] for s in stages}
+        cards = [
+            (s["title"], s["path"], s.get("operation", ""), titles.get(s.get("input"), ""))
+            for s in stages
+        ]
+    else:
+        cards = [(title, None, "", "") for title in PIPELINE_STAGES]
+        cards[0] = (PIPELINE_STAGES[0], st.session_state.image_bytes, "", "")
+
+    for row in range(0, len(cards), 2):
+        cols = st.columns(2, gap="medium")
+        for i, col in enumerate(cols):
+            n = row + i
+            if n >= len(cards):
+                break
+            title, path, operation, input_title = cards[n]
+            with col:
+                stage_slot(n + 1, title, f"ip_stage_{n}", path, operation, input_title)
 
 
 def feature_analysis_page():
