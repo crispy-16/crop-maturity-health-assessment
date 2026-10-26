@@ -7,7 +7,7 @@ The project has two independent pipelines:
 
 | Pipeline | Entry point | Question answered |
 |---|---|---|
-| Fruit (existing) | `matlab/run_dashboard.m` | How ripe is this mango? |
+| Fruit (mango ripeness) | `matlab/crop_pipeline.m` | How ripe is this mango? |
 | **Leaf (this document)** | `matlab/run_leaf_dashboard.m` | Is this leaf diseased, which disease, how badly? |
 
 ---
@@ -174,17 +174,15 @@ modes with no code change.
 
 ## 3. Dashboard
 
-Streamlit app, six pages. The leaf pages present the pipeline as a chain where
-each image is the input to the next step.
+The app opens on a home screen with two sections, **Mango ripeness** and
+**Leaf disease**. The leaf section has four pages:
 
 | Page | Contents |
 |---|---|
-| Dashboard | Upload, sample type, crop; verdict tiles; tissue composition bar |
-| Image Processing | **Stage 1** — original → resized → denoised → enhanced → L\*a\*b\* channels |
-| Feature Analysis | **Stage 2** — cluster map → merged clusters → opened → final mask → segmented leaf → feature tiles → edges |
-| Maturity Assessment | Fruit pipeline only |
-| Health Assessment | **Stage 3** — lesion class map → lesion mask → outlines → specks; verdict; all 41 measurements |
-| Final Report | Summary table, text report and features JSON download |
+| Dashboard | Upload, Analyze; condition, affected area, severity, symptom; tissue composition bar |
+| Image Processing | *Pipeline* tab: original → resized → denoised → k-means clusters → merged leaf clusters → opened → final mask → tissue class map → lesion mask. *Other transforms* tab: CLAHE, L\*a\*b\* channels, segmented leaf, leaf boundary, lesion outlines, top-hat specks, Canny edges, each captioned |
+| Disease Assessment | Verdict and confidence (says whether the SVM or the rules decided), tissue bar, lesion maps, feature tiles, all measurements |
+| Final Report | Summary, text report and features JSON download |
 
 ### MATLAB connection
 
@@ -193,8 +191,8 @@ The app reaches MATLAB one of two ways, chosen automatically:
 - **MATLAB Engine for Python**, if installed — direct call.
 - **Folder watcher** — `matlab/watch_leaf.m` runs in MATLAB and polls
   `outputs/queue/`. The app writes the image plus a `.job` file; MATLAB
-  processes it and writes `results.json`. A `watcher.alive` heartbeat lets the
-  app report whether MATLAB is reachable.
+  processes it (leaf or fruit) and writes `results.json`. A `watcher.alive`
+  heartbeat lets the app report whether MATLAB is reachable.
 
 The watcher path exists because installing the MATLAB Engine requires write
 access to `C:\Program Files\MATLAB\...`, which often fails without admin rights.
@@ -303,6 +301,7 @@ it measures what it claims to.
 | `run_cnn.m` | Classical vs CNN vs combined feature comparison |
 | `leaf_cnn_demo.m` | What the CNN sees, on one leaf |
 | `watch_leaf.m` | Folder watcher that serves the dashboard |
+| `crop_pipeline.m` | Mango ripeness pipeline (dashboard entry point; one argument shows a figure) |
 
 **Called by the above**
 
@@ -310,20 +309,13 @@ it measures what it claims to.
 `classify_leaf.m` · `leaf_demo.m` · `cnn_setup.m` · `cnn_activations.m` ·
 `run_leaf_dashboard.m`
 
-**Superseded** — `extract_all_leaves.m`, `train_leaf_model.m` (project-folder
-variants of `run_training.m`)
-
 ### Python — `src/`
 
-| File | Change |
+| File | Purpose |
 |---|---|
 | `src/backend/matlab_bridge.py` | Engine or watcher backend; routes fruit/leaf |
-| `src/backend/__init__.py` | Exports |
-| `src/ui/components.py` | Sample-type switch; leaf pages; chain layout |
-
-### Setup scripts
-
-`setup_app.ps1` · `start_app.ps1` · `fix_engine.ps1`
+| `src/ui/components.py` | Home screen, mango and leaf pages |
+| `src/ui/styles.py` | Theme per section, animations |
 
 ### Not committed
 
@@ -338,8 +330,7 @@ All are regenerable: run `run_training.m` to rebuild the CSV and model.
 ### MATLAB only
 
 ```matlab
-cd <project root>
-addpath('matlab')
+cd <repo>\matlab
 ```
 
 Then open and Run, in order:
@@ -350,20 +341,18 @@ Then open and Run, in order:
 
 ### Dashboard
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\setup_app.ps1   # once
-```
-
-Then each session:
-
-1. MATLAB: open `matlab/watch_leaf.m`, press Run, leave it running
-2. PowerShell: `.\start_app.ps1`
-3. Browser: upload a leaf → Sample type **Leaf (health)** → Mango → Analyze
+1. MATLAB: `cd <repo>\matlab`, run `watch_leaf`, leave it running
+   (not needed if the MATLAB Engine for Python is installed)
+2. PowerShell, in the repo: `.\.venv\Scripts\Activate.ps1`, then
+   `python -m streamlit run app.py`
+3. Browser: **Leaf disease** → upload a leaf → **Analyze image**
 
 The sidebar shows whether MATLAB is reachable.
 
 ### Requirements
 
-MATLAB with Image Processing Toolbox and Statistics and Machine Learning
-Toolbox. Deep Learning Toolbox plus a pretrained network only for the optional
-CNN comparison. Python 3.11+ with Streamlit for the dashboard.
+MATLAB with Image Processing Toolbox. Statistics and Machine Learning Toolbox
+for `run_training.m` (without it `segment_leaf.m` uses `imsegkmeans` and the
+condition comes from the rule-based fallback). Deep Learning Toolbox plus a
+pretrained network only for the optional CNN comparison. Python 3.10+ with
+Streamlit for the dashboard.

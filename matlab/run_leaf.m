@@ -5,7 +5,8 @@
 %
 % Three optional settings below. Leave them empty to let the script choose.
 
-DATASET = 'E:\DIP\DIP - mini project\MangoLeafBD Dataset\MangoLeafBD Dataset';
+% Default: <repo>\dataset\MangoLeafBD. Replace with your own path if it is elsewhere.
+DATASET = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'dataset', 'MangoLeafBD');
 
 IMAGE   = '';      % optional: one exact photo, full path
 CLASS   = '';      % optional: 'Sooty Mould' -> random image from that class only

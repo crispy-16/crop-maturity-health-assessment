@@ -1364,21 +1364,7 @@ def apply_section_theme(section: str):
     )
 
 
-def section_divider():
-    """Render a thin divider."""
-    st.markdown("<div class='cv-section'></div>", unsafe_allow_html=True)
-
 
 def section_label(text: str):
     """Render an uppercase section label with a fading rule."""
     st.markdown(f"<div class='cv-section'>{text}</div>", unsafe_allow_html=True)
-
-
-def status_badge(text: str, status: str = "ready"):
-    """Render a small status chip. status: ready | warning | neutral."""
-    dot = {"ready": "on", "warning": "wait"}.get(status, "")
-    st.markdown(
-        f"<div class='cv-chips' style='margin:0'><span class='cv-chip'>"
-        f"<span class='cv-dot {dot}'></span>{text}</span></div>",
-        unsafe_allow_html=True,
-    )

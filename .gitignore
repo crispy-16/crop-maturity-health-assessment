@@ -13,10 +13,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Project data
-data/*
-!data/.gitkeep
-
 # Generated outputs
 outputs/*
 !outputs/.gitkeep
@@ -24,4 +20,3 @@ outputs/*
 dataset/
 leaf_features.csv
 *.mat
-setup_log.txt

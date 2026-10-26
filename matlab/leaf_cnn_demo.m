@@ -7,7 +7,8 @@
 % Needs leaf_cnn_model.mat for the prediction bar chart, so run run_cnn.m
 % first. Without it the figure still shows the activations.
 
-DATASET = 'E:\DIP\DIP - mini project\MangoLeafBD Dataset\MangoLeafBD Dataset';
+% Default: <repo>\dataset\MangoLeafBD. Replace with your own path if it is elsewhere.
+DATASET = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'dataset', 'MangoLeafBD');
 IMAGE   = '';      % optional: one exact photo
 CLASS   = '';      % optional: 'Sooty Mould' -> random image from that class
 NETWORK = "";      % "" = auto

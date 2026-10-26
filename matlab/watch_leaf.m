@@ -23,21 +23,15 @@ root = fileparts(here);                            % the folder above matlab\
 
 % ---- Am I the right copy of this file? ---------------------------------
 % The queue folder is derived from this file's location, so running the
-% copy that sits in CropVision-Leaf\ (next to the zip contents) would watch
-% the wrong folder and never see the app's jobs.
+% copy that sits anywhere else would watch the wrong folder and never see
+% the app's jobs.
 [~, hereName] = fileparts(here);
 if ~strcmpi(hereName, 'matlab')
     fprintf(2, '\nWRONG COPY OF watch_leaf.m\n\n');
     fprintf(2, 'This file is in:\n  %s\n\n', here);
     fprintf(2, 'It must be run from the app''s "matlab" folder, because the\n');
     fprintf(2, 'queue folder is worked out from where this file sits.\n\n');
-    guess = fullfile(fileparts(here), 'CropVision', 'matlab', 'watch_leaf.m');
-    if isfile(guess)
-        fprintf(2, 'Open this one instead:\n  %s\n\n', guess);
-    else
-        fprintf(2, 'Look for ...\\CropVision\\matlab\\watch_leaf.m\n');
-        fprintf(2, '(run setup_app.ps1 first if that folder does not exist)\n\n');
-    end
+    fprintf(2, 'Open crop-maturity-health-assessment\\matlab\\watch_leaf.m instead.\n\n');
     return
 end
 
@@ -110,14 +104,7 @@ while true
                 case 'leaf'
                     run_leaf_dashboard(inputPath, outDir);
                 case 'fruit'
-                    if exist('crop_pipeline', 'file') == 2
-                        crop_pipeline(inputPath, outDir);
-                    elseif exist('run_dashboard', 'file') == 2
-                        run_dashboard(inputPath, outDir);
-                    else
-                        error(['run_dashboard.m (the mango pipeline) is not in ' ...
-                               'this matlab folder. Copy it in, or use Leaf mode.']);
-                    end
+                    crop_pipeline(inputPath, outDir);
                 otherwise
                     error('Unknown mode "%s".', mode);
             end

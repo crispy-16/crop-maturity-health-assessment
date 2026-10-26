@@ -13,7 +13,8 @@
 % Saves leaf_cnn_model.mat next to this script.
 % Run check_cnn.m first if you are not sure the toolbox is installed.
 
-DATASET   = 'E:\DIP\DIP - mini project\MangoLeafBD Dataset\MangoLeafBD Dataset';
+% Default: <repo>\dataset\MangoLeafBD. Replace with your own path if it is elsewhere.
+DATASET   = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'dataset', 'MangoLeafBD');
 PER_CLASS = 100;      % 20 for a quick test, 100-150 for the real run
 NETWORK   = "";       % "" = auto. Or "resnet18" / "googlenet" / "squeezenet"
 

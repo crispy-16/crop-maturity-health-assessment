@@ -1,7 +1,7 @@
 % matlab/classify_leaf.m
 % Turn the 41 features into a verdict.
 %
-% If matlab/leaf_model.mat exists (created by train_leaf_model.m) the
+% If matlab/leaf_model.mat exists (created by run_training.m) the
 % trained classifier is used. Otherwise a transparent rule-based fallback
 % runs, so the dashboard works before the model has been trained.
 function R = classify_leaf(f, names, M)

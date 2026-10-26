@@ -1,7 +1,2 @@
-streamlit
-opencv-python
-numpy
+streamlit>=1.50
 pillow
-matplotlib
-pandas
-scikit-image

@@ -9,7 +9,8 @@
 %
 % Takes roughly 20-30 min at PER_CLASS = 150. Start with 20 to check it runs.
 
-DATASET   = 'E:\DIP\DIP - mini project\MangoLeafBD Dataset\MangoLeafBD Dataset';
+% Default: <repo>\dataset\MangoLeafBD. Replace with your own path if it is elsewhere.
+DATASET   = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'dataset', 'MangoLeafBD');
 PER_CLASS = 150;      % images per class. 20 for a quick test, 500 for everything.
 
 %% ------------------------------------------------------------------------

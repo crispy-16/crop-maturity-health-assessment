@@ -293,11 +293,6 @@ def page_header(eyebrow: str, title: str, subtitle: str = "", small: bool = True
     """)
 
 
-def section_header(title: str, subtitle: str = "", label: str = ""):
-    """Backward-compatible wrapper around page_header."""
-    page_header(label or "CropVision", title, subtitle)
-
-
 def stat_tile(label: str, value: Optional[str], sub: str = "", tone: str = ""):
     """Small metric tile. value=None shows a pending dash."""
     shown = escape(value) if value else "&mdash;"
