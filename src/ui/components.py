@@ -15,11 +15,34 @@ from typing import Optional
 import streamlit as st
 from PIL import Image
 
-from src.backend import BackendError, run_analysis
+from src.backend import BackendError, backend_status, run_analysis
 from .styles import section_label
 
 
-CROPS = ["Select crop", "Coffee", "Tomato", "Mango"]
+# The app opens on a home screen that leads to one of two sections.
+SECTIONS = {
+    "mango": {
+        "name": "Mango ripeness",
+        "crop": "Mango",
+        "pages": [
+            "Dashboard",
+            "Image Processing",
+            "Feature Analysis",
+            "Maturity Assessment",
+            "Final Report",
+        ],
+    },
+    "leaf": {
+        "name": "Leaf disease",
+        "crop": "Mango leaf",
+        "pages": [
+            "Dashboard",
+            "Image Processing",
+            "Disease Assessment",
+            "Final Report",
+        ],
+    },
+}
 # Stages of the MATLAB chain (crop_pipeline.m), shown as placeholders
 # before the first analysis. Each stage takes the previous one's output.
 PIPELINE_STAGES = [
@@ -33,13 +56,36 @@ PIPELINE_STAGES = [
     "Final mask",
     "Segmented fruit",
 ]
-PAGES = [
-    "Dashboard",
-    "Image Processing",
-    "Feature Analysis",
-    "Maturity Assessment",
-    "Health Assessment",
-    "Final Report",
+# Leaf chain (run_leaf_dashboard.m): images each step passes to the next.
+# (image key, title, operation). "original" is the uploaded image.
+LEAF_STAGES = [
+    ("original", "Original", "Uploaded image"),
+    ("resized", "Resized", "Sampling: bilinear resize, longest side 384 px, antialiased"),
+    ("denoised", "Denoised", "3x3 median filter on each channel; every measurement uses this image"),
+    ("clusters", "K-means clusters", "k-means (k = 5) on 0.5·L*, a*, b* of the denoised image"),
+    ("cluster_union", "Leaf clusters merged", "Clusters owning more than 15% of the border are background; the rest are the leaf"),
+    ("opened", "Opened", "Opening (disk 3), largest region kept"),
+    ("mask", "Final leaf mask", "Closing (disk 5) and hole filling"),
+    ("lesion_map", "Tissue class map", "Each leaf pixel: healthy, chlorotic, necrotic, powdery or sooty (L*a*b* + S thresholds)"),
+    ("lesion_mask", "Lesion mask", "All non-healthy tissue; affected area = lesion / leaf pixels"),
+]
+# Images the leaf pipeline saves that the next step does not use.
+LEAF_TRANSFORMS = [
+    ("enhanced", "Contrast enhanced", "CLAHE on the L* channel (display and Canny only)"),
+    ("colorspace", "L*a*b* channels", "RGB to L*a*b*: L*, a*, b* side by side"),
+    ("segmented", "Segmented leaf", "Final mask applied to the denoised image"),
+    ("overlay", "Leaf boundary", "Mask perimeter drawn on the denoised image"),
+    ("lesion_overlay", "Lesion outlines", "Lesion boundaries drawn in red on the leaf"),
+    ("specks", "Specks", "Black top-hat (disk 5), thresholded inside the leaf"),
+    ("edges", "Edge map", "Canny edges of the enhanced image, inside the leaf"),
+]
+# Tissue class -> (feature key, display name, swatch colour matching the MATLAB colormap)
+TISSUE = [
+    ("frac_healthy", "Healthy", "#3DAB45"),
+    ("frac_chlorotic", "Chlorotic", "#F0CC29"),
+    ("frac_necrotic", "Necrotic", "#C7452E"),
+    ("frac_powdery", "Powdery", "#EBEBF5"),
+    ("frac_sooty", "Sooty", "#1A1A1F"),
 ]
 
 
@@ -59,6 +105,7 @@ def init_state():
         "image_bytes": None,
         "image_name": None,
         "crop_type": "Select crop",
+        "section": None,  # None = home screen, else a key of SECTIONS
         "analysis_requested": False,
         "uploader_id": 0,
         # Filled in later by the processing backend:
@@ -66,10 +113,6 @@ def init_state():
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
-
-    # Sync widget values early so the sidebar is never one step behind
-    if "_crop_select" in st.session_state:
-        st.session_state.crop_type = st.session_state["_crop_select"]
 
     uploaded = st.session_state.get(f"uploader_{st.session_state.uploader_id}")
     if uploaded is not None:
@@ -87,6 +130,13 @@ def _clear_image():
     st.session_state.analysis_requested = False
     st.session_state.results = {}
     st.session_state.uploader_id += 1
+
+
+def _open_section(section: Optional[str]):
+    """Switch to a section (None = home). Each section starts with no image."""
+    _clear_image()
+    st.session_state.section = section
+    st.session_state.crop_type = SECTIONS[section]["crop"] if section else "Select crop"
 
 
 def _request_analysis():
@@ -133,6 +183,9 @@ def _summarise(raw: dict) -> dict:
     }
     if not (raw["ok"] and f):
         return res
+    if raw["mode"] == "leaf":
+        _summarise_leaf(res, f, raw["health"])
+        return res
 
     res["color_features"] = _fmt(f.get("mean_L"), ".1f")
     res["color_features_sub"] = (
@@ -142,9 +195,13 @@ def _summarise(raw: dict) -> dict:
     res["texture_features_sub"] = f"Mean entropy · GLCM contrast {_fmt(f.get('glcm_contrast'))}"
     res["shape_features"] = _fmt(f.get("solidity"))
     res["shape_features_sub"] = f"Solidity · eccentricity {_fmt(f.get('eccentricity'))}"
-    if f.get("edge_density") is not None:
-        res["edge_features"] = f"{f['edge_density'] * 100:.1f}%"
-        res["edge_features_sub"] = "Canny edge pixels in fruit"
+    if f.get("dft_low") is not None:
+        res["dft_features"] = f"{f['dft_low'] * 100:.0f}%"
+        res["dft_features_sub"] = (
+            f"Low-freq energy · mid {_fmt(f.get('dft_mid'))} · high {_fmt(f.get('dft_high'))}"
+        )
+    if f.get("area_fraction") is not None:
+        res["fruit_area"] = f"{f['area_fraction'] * 100:.1f}%"
 
     hues = {
         "green": f.get("frac_green"),
@@ -159,18 +216,53 @@ def _summarise(raw: dict) -> dict:
     return res
 
 
+def _summarise_leaf(res: dict, f: dict, h: dict):
+    """Leaf verdict (classify_leaf.m) and feature tiles."""
+    if h.get("condition"):
+        res["condition"] = h["condition"]
+    if h.get("severity"):
+        res["severity"] = h["severity"]
+    if h.get("affected_area") is not None:
+        res["affected_area"] = f"{h['affected_area']:.1f}%"
+    if h.get("symptom"):
+        res["symptom"] = h["symptom"]
+    conf = h.get("confidence")
+    if isinstance(conf, (int, float)) and conf == conf:  # NaN when the rules decided
+        res["confidence"] = f"{conf:.0f}%"
+    res["decision_source"] = (
+        "Trained SVM (leaf_model.mat)" if h.get("source") == "model"
+        else "Rule-based fallback (no leaf_model.mat)"
+    )
+    res["tissue"] = [(name, f.get(key) or 0.0, col) for key, name, col in TISSUE]
+
+    res["lesion_features"] = str(int(round((f.get("lesion_count") or 0) * 100)))
+    res["lesion_features_sub"] = (
+        f"Lesion blobs · largest {(f.get('lesion_max_area') or 0) * 100:.1f}% of leaf"
+    )
+    res["speck_features"] = str(int(round((f.get("speck_count") or 0) * 100)))
+    res["speck_features_sub"] = (
+        f"Top-hat specks · {(f.get('speck_frac') or 0) * 100:.1f}% of leaf"
+    )
+    res["shape_features"] = _fmt(f.get("solidity"))
+    res["shape_features_sub"] = f"Solidity · convex deficiency {_fmt(f.get('convex_deficiency'))}"
+    res["texture_features"] = _fmt(f.get("mean_entropy"))
+    res["texture_features_sub"] = f"Mean entropy · GLCM contrast {_fmt(f.get('glcm_contrast'))}"
+
+
 def _sub(key: str, default: str) -> str:
     """Tile caption from the results, falling back to the static text."""
     return _result(f"{key}_sub") or default
 
 
 def _run_backend():
-    """Run the MATLAB pipeline on the stored image and save the results."""
+    """Run this section's MATLAB pipeline on the stored image and save the results."""
+    mode = "leaf" if st.session_state.section == "leaf" else "fruit"
     try:
-        with st.spinner("Running MATLAB pipeline..."):
+        with st.spinner(f"Running MATLAB {mode} pipeline..."):
             raw = run_analysis(
                 st.session_state.image_bytes,
                 st.session_state.image_name or "input.png",
+                mode=mode,
             )
     except BackendError as exc:
         st.session_state.analysis_requested = False
@@ -181,7 +273,8 @@ def _run_backend():
     if raw["ok"]:
         st.toast("Analysis complete.")
     else:
-        st.toast("Segmentation did not find a plausible fruit region.")
+        target = "leaf" if mode == "leaf" else "fruit"
+        st.toast(f"Segmentation did not find a plausible {target} region.")
     st.rerun()
 
 
@@ -219,10 +312,11 @@ def stat_tile(label: str, value: Optional[str], sub: str = "", tone: str = ""):
     """)
 
 
-def image_slot(title: str, key: str, source=None, empty_text: str = "Awaiting output"):
+def image_slot(title: str, key: str, source=None, empty_text: str = "Awaiting output",
+               caption: str = ""):
     """
     Card that shows an image, or an animated placeholder if source is None.
-    `key` must be unique on the page.
+    `key` must be unique on the page. `caption` (HTML) goes under the image.
     """
     with st.container(key=f"card_{key}"):
         tag = "<span class='cv-tag live'>Ready</span>" if source is not None else "<span class='cv-tag'>Pending</span>"
@@ -240,6 +334,8 @@ def image_slot(title: str, key: str, source=None, empty_text: str = "Awaiting ou
                     <div>{empty_text}</div>
                 </div>
             """)
+        if caption:
+            _html(f"<div class='cv-caption'>{caption}</div>")
 
 
 def stage_slot(number: int, title: str, key: str, source=None,
@@ -280,6 +376,23 @@ def notice(title: str, body: str, kind: str = "warning"):
     """)
 
 
+def tissue_bar(rows):
+    """Stacked bar of the five tissue classes, with a legend."""
+    segs = "".join(
+        f"<div style='flex:{max(frac, 0.0001)};background:{col}' title='{name}'></div>"
+        for name, frac, col in rows if frac > 0.001
+    )
+    keys = "".join(
+        f"<span class='cv-chip'><span style='width:10px;height:10px;border-radius:3px;"
+        f"background:{col};display:inline-block'></span>{name} {frac * 100:.1f}%</span>"
+        for name, frac, col in rows if frac > 0.001
+    )
+    _html(f"""
+        <div class="cv-tissue">{segs}</div>
+        <div class="cv-chips" style="margin:0 0 1rem 0">{keys}</div>
+    """)
+
+
 def _chips():
     """Status chips summarising the current session."""
     has_img = st.session_state.image_bytes is not None
@@ -303,25 +416,41 @@ def _chips():
 # SIDEBAR
 # ============================================================================
 
-def render_sidebar() -> str:
+def _brand(sub: str):
+    _html(f"""
+        <div class="cv-brand">
+            <div class="cv-logo"></div>
+            <div>
+                <div class="cv-brand-name">CropVision</div>
+                <div class="cv-brand-sub">{sub}</div>
+            </div>
+        </div>
+    """)
+
+
+def render_home_sidebar():
+    """Sidebar for the home screen: brand and a short hint."""
+    with st.sidebar:
+        _brand("Maturity &amp; health")
+        _html("""
+            <div class="cv-side-label">Start</div>
+            <div class="cv-stat-sub" style="margin-left:0.35rem">
+                Choose a section on the right: mango ripeness or leaf disease.
+            </div>
+        """)
+
+
+def render_sidebar(section: str) -> str:
     """Brand, navigation and session card. Returns the selected page."""
     with st.sidebar:
-        _html("""
-            <div class="cv-brand">
-                <div class="cv-logo"></div>
-                <div>
-                    <div class="cv-brand-name">CropVision</div>
-                    <div class="cv-brand-sub">Maturity &amp; health</div>
-                </div>
-            </div>
-            <div class="cv-side-label">Navigate</div>
-        """)
+        _brand(SECTIONS[section]["name"])
+        _html('<div class="cv-side-label">Navigate</div>')
 
         page = st.radio(
             "Navigation",
-            PAGES,
+            SECTIONS[section]["pages"],
             label_visibility="collapsed",
-            key="main_nav",
+            key=f"nav_{section}",
         )
 
         name = st.session_state.image_name or "None"
@@ -339,7 +468,68 @@ def render_sidebar() -> str:
                 <div class="cv-session-row"><span>Status</span><b>{status}</b></div>
             </div>
         """)
+        try:
+            bs = backend_status()
+        except Exception:
+            bs = {"backend": "none", "ready": False, "detail": "unavailable"}
+        _html(f"""
+            <div class="cv-session" style="margin-top:0.6rem">
+                <div class="cv-side-label" style="margin-left:0">MATLAB</div>
+                <div class="cv-session-row">
+                    <span>{escape(bs['backend'])}</span>
+                    <b>{'Ready' if bs['ready'] else 'Not ready'}</b>
+                </div>
+                <div class="cv-stat-sub" style="margin-top:0.35rem">{escape(bs['detail'])}</div>
+            </div>
+        """)
+        st.write("")
+        st.button("Back to home", key="home_btn", width="stretch",
+                  on_click=_open_section, args=(None,))
     return page
+
+
+# ============================================================================
+# HOME
+# ============================================================================
+
+def _choose_card(section: str, kicker: str, title: str, text: str, items, orb: str = ""):
+    """One of the two big cards on the home screen."""
+    with st.container(key=f"card_choose_{section}"):
+        tags = "".join(f"<span>{escape(i)}</span>" for i in items)
+        _html(f"""
+            <div class="cv-orb {orb}"></div>
+            <div class="cv-choose-kicker">{kicker}</div>
+            <div class="cv-choose-title">{title}</div>
+            <div class="cv-choose-text">{text}</div>
+            <div class="cv-choose-list">{tags}</div>
+        """)
+        st.button(f"Open {SECTIONS[section]['name'].lower()}", key=f"open_{section}",
+                  type="primary", width="stretch", on_click=_open_section, args=(section,))
+
+
+def home_page():
+    """Start screen: pick mango ripeness or leaf disease."""
+    page_header(
+        "Digital image processing",
+        "Crop maturity<br><span class='cv-grad'>&amp; health</span>",
+        "Choose what you want to assess. Each section has its own upload, "
+        "processing pipeline and results.",
+        small=False,
+    )
+    left, right = st.columns(2, gap="large")
+    with left:
+        _choose_card(
+            "mango", "Section 01", "Mango ripeness",
+            "Segment the fruit and measure colour, texture and shape to judge how ripe it is.",
+            ["MATLAB pipeline", "Segmentation", "Features", "Maturity"],
+        )
+    with right:
+        _choose_card(
+            "leaf", "Section 02", "Leaf disease",
+            "Find the leaf and the diseased spots on it to estimate the affected area.",
+            ["MATLAB pipeline", "Lesions", "Affected area", "Disease class"],
+            orb="leaf",
+        )
 
 
 # ============================================================================
@@ -379,47 +569,45 @@ def _upload_card():
 
 
 def _configure_card():
-    """Crop selection, readiness checklist and the Analyze button."""
+    """Readiness checklist and the Analyze button. The crop is fixed by the section."""
     with st.container(key="card_config"):
-        _html("""
+        _html(f"""
             <div class="cv-card-head">
                 <span class="cv-step">02</span>
-                <span class="cv-card-title">Configure and run</span>
+                <span class="cv-card-title">Run the analysis</span>
+            </div>
+            <div class="cv-rows">
+                <div class="cv-row"><span>Crop</span><b>{escape(st.session_state.crop_type)}</b></div>
             </div>
         """)
 
-        # Mirror into a widget key so the choice survives page switches
-        if "_crop_select" not in st.session_state:
-            st.session_state["_crop_select"] = st.session_state.crop_type
-        crop = st.selectbox("Crop type", CROPS, key="_crop_select")
-        st.session_state.crop_type = crop
-
         has_img = st.session_state.image_bytes is not None
-        has_crop = crop != "Select crop"
+        try:
+            matlab_ready = backend_status()["ready"]
+        except Exception:
+            matlab_ready = False
         _html(f"""
             <div class="cv-checklist">
                 <div class="cv-check {'done' if has_img else ''}"><i></i>Image uploaded</div>
-                <div class="cv-check {'done' if has_crop else ''}"><i></i>Crop type selected</div>
+                <div class="cv-check {'done' if matlab_ready else ''}"><i></i>MATLAB reachable</div>
             </div>
         """)
 
         st.write("")
         if st.button("Analyze image", key="analyze_btn", type="primary", width="stretch",
                      on_click=_request_analysis):
-            if has_img and has_crop:
+            if has_img:
                 _run_backend()
-            elif not has_img:
-                st.warning("Upload an image first.")
             else:
-                st.warning("Select a crop type.")
+                st.warning("Upload an image first.")
 
 
-def dashboard_page():
-    """Main dashboard: upload, configure, quick results."""
+def mango_dashboard_page():
+    """Mango dashboard: upload, run, quick results."""
     page_header(
-        "Digital image processing",
-        "Crop maturity<br><span class='cv-grad'>&amp; health</span>",
-        "Upload a still image, choose the crop, and run the assessment.",
+        "Mango ripeness",
+        "Mango<br><span class='cv-grad'>ripeness</span>",
+        "Upload a still image of a mango and run the MATLAB pipeline.",
         small=False,
     )
     _chips()
@@ -432,23 +620,88 @@ def dashboard_page():
 
     section_label("Results at a glance")
     c1, c2, c3, c4 = st.columns(4, gap="medium")
-    crop = st.session_state.crop_type
     with c1:
-        stat_tile("Crop", crop if crop != "Select crop" else None, "Selected type", "accent")
+        stat_tile("Crop", "Mango", "This section", "accent")
     with c2:
         stat_tile("Maturity", _result("maturity"), "Not ready · Ready · Overripe", "accent")
     with c3:
-        stat_tile("Health", _result("health"), "Visible condition", "warning")
+        stat_tile("Evidence", _result("maturity_evidence"), _sub("maturity_evidence", "Largest hue class"))
     with c4:
-        stat_tile("Affected area", _result("affected_area"), "Of crop region", "danger")
+        stat_tile("Fruit area", _result("fruit_area"), "Of image, from final mask")
+
+
+def leaf_dashboard_page():
+    """Leaf dashboard: upload, run, verdict tiles and tissue composition."""
+    page_header(
+        "Leaf disease",
+        "Leaf<br><span class='cv-grad'>disease</span>",
+        "Upload a still image of a single mango leaf and run the MATLAB leaf pipeline.",
+        small=False,
+    )
+    _chips()
+
+    left, right = st.columns([1.35, 1], gap="large")
+    with left:
+        _upload_card()
+    with right:
+        _configure_card()
+
+    section_label("Results at a glance")
+    c1, c2, c3, c4 = st.columns(4, gap="medium")
+    with c1:
+        stat_tile("Condition", _result("condition"), "Disease class", "accent")
+    with c2:
+        stat_tile("Affected area", _result("affected_area"), "Lesion area / leaf area", "danger")
+    with c3:
+        stat_tile("Severity", _result("severity"), "None · Mild · Moderate · Severe", "warning")
+    with c4:
+        stat_tile("Symptom", _result("symptom"), "Dominant visible symptom")
+    if _result("tissue"):
+        section_label("Tissue composition")
+        tissue_bar(_result("tissue"))
 
 
 # ============================================================================
 # OTHER PAGES
 # ============================================================================
 
-def image_processing_page():
-    """Every image the MATLAB chain passes on, in order."""
+def _stage_grid(cards, prefix: str):
+    """Two-column grid of stage_slot cards: (title, source, operation, input title)."""
+    for row in range(0, len(cards), 2):
+        cols = st.columns(2, gap="medium")
+        for i, col in enumerate(cols):
+            n = row + i
+            if n >= len(cards):
+                break
+            title, source, operation, input_title = cards[n]
+            with col:
+                stage_slot(n + 1, title, f"{prefix}_{n}", source, operation, input_title)
+
+
+def transform_slot(title: str, key: str, source=None, transform: str = "",
+                   note: str = "", empty_text: str = "Awaiting output"):
+    """Image card captioned with the transform or filter that produced it."""
+    caption = f"<b>Transform:</b> {escape(transform)}" if transform else ""
+    if note:
+        caption += f"<br>{escape(note)}"
+    image_slot(title, key, source, empty_text, caption)
+
+
+def _transform_grid(items, prefix: str, empty_text: str = "Awaiting output"):
+    """Two-column grid of transform_slot cards: (title, source, transform, note)."""
+    for row in range(0, len(items), 2):
+        cols = st.columns(2, gap="medium")
+        for i, col in enumerate(cols):
+            n = row + i
+            if n >= len(items):
+                break
+            title, source, transform, note = items[n]
+            with col:
+                transform_slot(title, f"{prefix}_{n}", source, transform, note, empty_text)
+
+
+def mango_processing_page():
+    """Pipeline tab: the images the MATLAB chain passes on. Other tab: the rest."""
     page_header(
         "Preprocessing and segmentation",
         "Processing <span class='cv-grad'>pipeline</span>",
@@ -467,15 +720,62 @@ def image_processing_page():
         cards = [(title, None, "", "") for title in PIPELINE_STAGES]
         cards[0] = (PIPELINE_STAGES[0], st.session_state.image_bytes, "", "")
 
-    for row in range(0, len(cards), 2):
-        cols = st.columns(2, gap="medium")
-        for i, col in enumerate(cols):
-            n = row + i
-            if n >= len(cards):
-                break
-            title, path, operation, input_title = cards[n]
-            with col:
-                stage_slot(n + 1, title, f"ip_stage_{n}", path, operation, input_title)
+    # Images MATLAB saved that are not passed to the next stage, e.g. the
+    # "what changed" view of each stage
+    others = [
+        (f"{s['title']}: what changed", s["change_path"],
+         s.get("operation", ""), s.get("change_note", ""))
+        for s in stages if s.get("change_path")
+    ]
+
+    tab_main, tab_other = st.tabs(["Pipeline", "Other transforms"])
+    with tab_main:
+        _stage_grid(cards, "ip_stage")
+    with tab_other:
+        if others:
+            notice("Not passed on",
+                   "These images show what a stage did. The next stage does not use them.",
+                   kind="info")
+            _transform_grid(others, "ip_other")
+        elif stages:
+            notice("None saved",
+                   "This version of crop_pipeline.m saves only the pipeline images.",
+                   kind="info")
+        else:
+            notice("After analysis",
+                   "Images that show what each filter changed appear here once the "
+                   "pipeline has run.", kind="info")
+
+
+def leaf_processing_page():
+    """Pipeline tab: the images the leaf chain passes on. Other tab: the rest."""
+    page_header(
+        "Leaf preprocessing and segmentation",
+        "Leaf <span class='cv-grad'>pipeline</span>",
+        "Each stage takes the image produced by the stage before it.",
+    )
+    _chips()
+
+    images = _result("images") or {}
+    done = bool(images)
+    cards = []
+    for key, title, operation in LEAF_STAGES:
+        source = st.session_state.image_bytes if key == "original" else images.get(key)
+        if done and source is None:
+            continue  # e.g. no cluster images when the border fallback was used
+        cards.append((title, source, operation, cards[-1][0] if cards else ""))
+
+    tab_main, tab_other = st.tabs(["Pipeline", "Other transforms"])
+    with tab_main:
+        _stage_grid(cards, "lf_stage")
+    with tab_other:
+        notice("Not passed on",
+               "These images show what a transform or filter does. "
+               "The next stage does not use them.", kind="info")
+        items = [(title, images.get(key), transform, "")
+                 for key, title, transform in LEAF_TRANSFORMS
+                 if not done or key in images]
+        _transform_grid(items, "lf_other")
 
 
 def feature_analysis_page():
@@ -494,14 +794,14 @@ def feature_analysis_page():
     with c3:
         stat_tile("Shape", _result("shape_features"), _sub("shape_features", "Shape descriptors"))
     with c4:
-        stat_tile("Edges", _result("edge_features"), _sub("edge_features", "Edge detection"))
+        stat_tile("Frequency", _result("dft_features"), _sub("dft_features", "DFT energy bands"))
 
-    section_label("Visual outputs")
+    section_label("Features are measured inside")
     c5, c6 = st.columns(2, gap="medium")
     with c5:
-        image_slot("Segmentation mask", "fa_mask", _output("mask"))
+        image_slot("Final mask", "fa_mask", _output("mask"))
     with c6:
-        image_slot("Edge map", "fa_edges", _output("edges"))
+        image_slot("Segmented fruit", "fa_segmented", _output("segmented"))
 
 
 def maturity_assessment_page():
@@ -543,50 +843,75 @@ def maturity_assessment_page():
         with c1:
             image_slot("Input", "mt_input", st.session_state.image_bytes, "Upload an image on the dashboard")
         with c2:
-            image_slot("Ripeness map", "mt_map", _output("ripeness_map"))
+            image_slot("Segmented fruit", "mt_segmented", _output("segmented"))
     with tab3:
-        with st.container(key="card_mt_details"):
-            features = _result("features")
-            if features:
-                rows = "".join(
-                    f"<div class='cv-row'><span>{escape(name)}</span><b>{_fmt(value, '.4f')}</b></div>"
-                    for name, value in features.items()
-                )
-                _html(f"""
-                    <div class="cv-slot-head"><span class="cv-slot-title">Measurements</span>
-                    <span class="cv-tag live">Ready</span></div>
-                    <div class="cv-rows">{rows}</div>
-                """)
-            else:
-                _html("""
-                    <div class="cv-slot-head"><span class="cv-slot-title">Measurements</span>
-                    <span class="cv-tag">Pending</span></div>
-                    <div class="cv-stat-sub">Detailed measurements appear here after analysis.</div>
-                """)
+        _measurements_card("mt_details")
 
 
-def health_assessment_page():
-    """Visible abnormality results."""
+def _measurements_card(key: str):
+    """Every MATLAB measurement in one card."""
+    with st.container(key=f"card_{key}"):
+        features = _result("features")
+        if features:
+            rows = "".join(
+                f"<div class='cv-row'><span>{escape(name)}</span><b>{_fmt(value, '.4f')}</b></div>"
+                for name, value in features.items()
+            )
+            _html(f"""
+                <div class="cv-slot-head"><span class="cv-slot-title">Measurements</span>
+                <span class="cv-tag live">Ready</span></div>
+                <div class="cv-rows">{rows}</div>
+            """)
+        else:
+            _html("""
+                <div class="cv-slot-head"><span class="cv-slot-title">Measurements</span>
+                <span class="cv-tag">Pending</span></div>
+                <div class="cv-stat-sub">Detailed measurements appear here after analysis.</div>
+            """)
+
+
+def leaf_disease_page():
+    """Leaf verdict from classify_leaf.m, lesion images and all measurements."""
     page_header(
-        "Health",
-        "Health <span class='cv-grad'>assessment</span>",
+        "Leaf health",
+        "Disease <span class='cv-grad'>assessment</span>",
     )
     _chips()
 
-    c1, c2, c3 = st.columns(3, gap="medium")
+    c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        stat_tile("Condition", _result("health"), "Detected condition", "warning")
+        stat_tile("Condition", _result("condition"), "Disease class", "accent")
     with c2:
-        stat_tile("Affected area", _result("affected_area"), "Of crop region", "danger")
+        stat_tile("Affected area", _result("affected_area"), "Lesion area / leaf area", "danger")
     with c3:
-        stat_tile("Severity", _result("severity"), "Visible extent")
-
-    section_label("Detected regions")
-    c4, c5 = st.columns(2, gap="medium")
+        stat_tile("Severity", _result("severity"), "<2 · <10 · <25 · <50 · ≥50 %", "warning")
     with c4:
-        image_slot("Abnormal region mask", "ha_mask", empty_text="Not produced by the MATLAB pipeline yet")
-    with c5:
-        image_slot("Overlay", "ha_overlay", empty_text="Not produced by the MATLAB pipeline yet")
+        stat_tile("Confidence", _result("confidence"),
+                  _result("decision_source") or "SVM score, or rules")
+
+    if _result("tissue"):
+        section_label("Tissue composition")
+        tissue_bar(_result("tissue"))
+
+    tab1, tab2, tab3 = st.tabs(["Lesion maps", "Features", "Measurements"])
+    with tab1:
+        c5, c6 = st.columns(2, gap="medium")
+        with c5:
+            image_slot("Tissue class map", "ld_map", _output("lesion_map"))
+        with c6:
+            image_slot("Lesion mask", "ld_mask", _output("lesion_mask"))
+    with tab2:
+        c7, c8, c9, c10 = st.columns(4, gap="medium")
+        with c7:
+            stat_tile("Lesions", _result("lesion_features"), _sub("lesion_features", "Lesion blobs"))
+        with c8:
+            stat_tile("Specks", _result("speck_features"), _sub("speck_features", "Black top-hat"))
+        with c9:
+            stat_tile("Shape", _result("shape_features"), _sub("shape_features", "Solidity"))
+        with c10:
+            stat_tile("Texture", _result("texture_features"), _sub("texture_features", "Entropy"))
+    with tab3:
+        _measurements_card("ld_details")
 
     notice(
         "Disclaimer",
@@ -603,15 +928,23 @@ def final_report_page():
     )
     _chips()
 
-    crop = st.session_state.crop_type
     rows = [
         ("Input image", st.session_state.image_name),
-        ("Crop", crop if crop != "Select crop" else None),
-        ("Maturity", _result("maturity")),
-        ("Health", _result("health")),
-        ("Affected area", _result("affected_area")),
-        ("Severity", _result("severity")),
+        ("Crop", st.session_state.crop_type),
     ]
+    if st.session_state.section == "leaf":
+        rows += [
+            ("Condition", _result("condition")),
+            ("Affected area", _result("affected_area")),
+            ("Severity", _result("severity")),
+            ("Symptom", _result("symptom")),
+        ]
+    else:
+        rows += [
+            ("Maturity", _result("maturity")),
+            ("Evidence", _result("maturity_evidence")),
+            ("Fruit area", _result("fruit_area")),
+        ]
     row_html = "".join(
         f"<div class='cv-row'><span>{label}</span>"
         f"<b class='{'' if value else 'pending'}'>{escape(value) if value else 'Pending'}</b></div>"
@@ -652,6 +985,10 @@ def _report_text(rows) -> str:
     """Plain-text report: the summary rows plus every MATLAB measurement."""
     lines = ["CropVision - Crop maturity and health assessment", ""]
     lines += [f"{label}: {value or 'Pending'}" for label, value in rows]
+    tissue = _result("tissue")
+    if tissue:
+        lines += ["", "Tissue composition"]
+        lines += [f"  {name}: {frac * 100:.1f}%" for name, frac, _ in tissue]
     features = _result("features") or {}
     if features:
         lines += ["", "Measurements (MATLAB)"]

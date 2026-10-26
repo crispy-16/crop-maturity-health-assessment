@@ -20,3 +20,8 @@ data/*
 # Generated outputs
 outputs/*
 !outputs/.gitkeep
+# Leaf pipeline: dataset, training outputs and the trained model are regenerable
+dataset/
+leaf_features.csv
+*.mat
+setup_log.txt

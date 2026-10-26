@@ -1,0 +1,251 @@
+% matlab/crop_pipeline.m
+% The whole pipeline in one file. Each stage takes the image produced by the
+% stage before it:
+%   original -> resized -> denoised -> contrast enhanced            (Unit 1)
+%   -> k-means cluster map -> initial mask -> active contour
+%   -> final mask -> segmented fruit                                (segmentation)
+%   -> colour / texture / shape / DFT features                      (Units 1-2)
+%
+% Dashboard:  jsonPath = crop_pipeline(imagePath, outDir)
+%   saves every stage as NN_<key>.png in outDir and writes results.json.
+% MATLAB:     crop_pipeline('langra-mango-plant.jpg')
+%   same, saved to a temp folder, and shows all stages in one figure.
+function jsonPath = crop_pipeline(imagePath, outDir)
+showFigure = nargin < 2;
+if showFigure, outDir = fullfile(tempdir, 'crop_pipeline'); end
+if ~isfolder(outDir), mkdir(outDir); end
+stages = struct('key', {}, 'title', {}, 'operation', {}, 'input', {}, 'file', {}, ...
+    'change', {}, 'change_note', {});
+
+% ======================= 1. ORIGINAL =======================
+img = imread(imagePath);
+if size(img, 3) == 1, img = repmat(img, [1 1 3]); end   % greyscale -> RGB
+img = img(:,:,1:3);                                      % drop alpha channel
+stages = save_stage(stages, outDir, img, 'original', 'Original', ...
+    'Uploaded image, converted to 3-channel RGB', '');
+
+% ======================= 2. SAMPLING (Unit 1) =======================
+% Resize so the longest side is 512 px, aspect ratio same
+scale = 512 / max(size(img, 1), size(img, 2));
+resized = imresize(img, scale, 'bilinear', 'Antialiasing', true);
+stages = save_stage(stages, outDir, resized, 'resized', 'Resized', ...
+    'Sampling: bilinear resize, longest side 512 px', 'original');
+
+% ======================= 3. NOISE REDUCTION =======================
+% 3x3 median filter on each colour channel
+den = resized;
+for c = 1:3
+    den(:,:,c) = medfilt2(resized(:,:,c), [3 3]);
+end
+stages = save_stage(stages, outDir, den, 'denoised', 'Denoised', ...
+    '3x3 median filter on each colour channel', 'resized', resized);
+
+% ======================= 4. CONTRAST ENHANCEMENT =======================
+% Histogram equalisation on brightness (V) only
+hsv = rgb2hsv(den);
+hsv(:,:,3) = histeq(hsv(:,:,3));
+enhanced = im2uint8(hsv2rgb(hsv));
+stages = save_stage(stages, outDir, enhanced, 'enhanced', 'Contrast enhanced', ...
+    'Histogram equalisation of the V channel (HSV)', 'denoised', den);
+
+% ======================= 5. K-MEANS CLUSTERING (segment.m) =======================
+lab = rgb2lab(enhanced);
+a = lab(:,:,2);
+b = lab(:,:,3);
+
+[rows, cols, ~] = size(enhanced);
+[X, Y] = meshgrid(1:cols, 1:rows);
+cX = cols / 2;
+cY = rows / 2;
+dist_center = sqrt((X - cX).^2 + (Y - cY).^2);
+dist_center = dist_center / max(dist_center(:));
+
+% Same features as segment.m (a*, b*, 10 x distance from centre), stacked as
+% a 3-layer image so imsegkmeans (Image Processing Toolbox) can cluster them.
+% kmeans() would need the Statistics and Machine Learning Toolbox.
+features = single(cat(3, a, b, 10 * dist_center));
+
+rng(0);   % same clusters every run, so the dashboard result is repeatable
+cluster_map = double(imsegkmeans(features, 4, 'NumAttempts', 5));
+stages = save_stage(stages, outDir, label2rgb(cluster_map), 'clusters', 'K-means clusters', ...
+    'k-means (k = 4) on a*, b* and distance from the centre', 'enhanced');
+
+% ======================= 6. INITIAL MASK =======================
+% The cluster that covers most of the image centre is the mango
+center_mask = dist_center < 0.25;
+center_clusters = cluster_map(center_mask);
+mango_cluster = mode(center_clusters);
+
+initial_mask = (cluster_map == mango_cluster);
+initial_mask = imfill(initial_mask, 'holes');
+initial_mask = bwareafilt(initial_mask, 1);
+stages = save_stage(stages, outDir, initial_mask, 'initial_mask', 'Initial mask', ...
+    'Centre cluster, holes filled, largest region kept', 'clusters');
+
+% ======================= 7. ACTIVE CONTOUR =======================
+refined_mask = activecontour(lab, initial_mask, 100, 'Chan-Vese');
+stages = save_stage(stages, outDir, refined_mask, 'active_contour', 'Active contour', ...
+    'Chan-Vese active contour, 100 iterations on L*a*b*', 'initial_mask', initial_mask);
+
+% ======================= 8. MORPHOLOGICAL CLEAN-UP =======================
+mask = imopen(refined_mask, strel('disk', 3));
+mask = imclose(mask, strel('disk', 5));
+mask = imfill(mask, 'holes');
+mask = bwareafilt(mask, 1);
+stages = save_stage(stages, outDir, mask, 'mask', 'Final mask', ...
+    'Opening, closing, hole filling, largest region kept', 'active_contour', refined_mask);
+
+% Sanity check: fruit should cover a plausible fraction of the image
+frac = nnz(mask) / numel(mask);
+ok = frac > 0.03 && frac < 0.90;
+
+% ======================= 9. SEGMENTED FRUIT =======================
+segmented_img = enhanced;
+segmented_img(repmat(~mask, [1 1 3])) = 0;
+stages = save_stage(stages, outDir, segmented_img, 'segmented', 'Segmented fruit', ...
+    'Final mask applied to the enhanced image, background set to black', 'mask', enhanced);
+
+% ======================= 10. FEATURES (Units 1-2) =======================
+feats = struct();
+if ok
+    [f, names] = extract_features(enhanced, mask);
+    for k = 1:numel(f)
+        feats.(names{k}) = f(k);   % each feature becomes a named field
+    end
+end
+
+% ======================= SAVE RESULTS =======================
+out = struct();
+out.version = 4;
+out.ok = ok;
+out.stages = stages;
+out.images = struct();
+for k = 1:numel(stages)
+    out.images.(stages(k).key) = stages(k).file;
+end
+out.features = feats;
+
+jsonPath = fullfile(outDir, 'results.json');
+fid = fopen(jsonPath, 'w');
+fwrite(fid, jsonencode(out, 'PrettyPrint', true), 'char');
+fclose(fid);
+
+if showFigure
+    figure('Name', 'Crop pipeline', 'Position', [50 50 1500 700]);
+    for k = 1:numel(stages)
+        subplot(2, ceil(numel(stages) / 2), k);
+        imshow(imread(fullfile(outDir, stages(k).file)));
+        title(sprintf('%d. %s', k, stages(k).title));
+    end
+    fprintf('Stage images saved in %s\n', outDir);
+end
+end
+
+
+% ======================= HELPERS =======================
+
+function stages = save_stage(stages, outDir, im, key, title, operation, inputKey, prev)
+% Write one stage image as NN_<key>.png and add it to the stage list.
+% If prev (the stage's input image) is given, also save NN_<key>_change.png
+% showing what this stage changed.
+n = numel(stages) + 1;
+file = sprintf('%02d_%s.png', n, key);
+if ~islogical(im), im = im2uint8(im); end   % 8-bit PNG the browser can show
+imwrite(im, fullfile(outDir, file));
+stages(n).key = key;
+stages(n).title = title;
+stages(n).operation = operation;
+stages(n).input = inputKey;
+stages(n).file = file;
+stages(n).change = '';
+stages(n).change_note = '';
+if nargin < 8, return; end
+
+if islogical(im) && islogical(prev)
+    % Masks: green = pixels added, red = pixels removed, grey = unchanged
+    added = im & ~prev;  removed = ~im & prev;  kept = im & prev;
+    view = cat(3, removed, added, false(size(im))) + 0.35 * repmat(kept, [1 1 3]);
+    note = sprintf('%.1f%% of pixels added, %.1f%% removed', ...
+        100 * mean(added(:)), 100 * mean(removed(:)));
+else
+    % Images: absolute difference, stretched so small changes are visible
+    if ~islogical(prev), prev = im2uint8(prev); end
+    d = sum(abs(double(im) - double(prev)), 3) / size(im, 3);
+    v = sort(d(:));
+    hi = max(v(ceil(0.99 * numel(v))), eps);   % 99th percentile = white
+    view = min(d / hi, 1);
+    note = sprintf('%.1f%% of pixels changed, mean change %.1f grey levels', ...
+        100 * mean(d(:) > 0), mean(d(:)));
+end
+changeFile = sprintf('%02d_%s_change.png', n, key);
+imwrite(im2uint8(view), fullfile(outDir, changeFile));
+stages(n).change = changeFile;
+stages(n).change_note = note;
+end
+
+
+function [f, names] = extract_features(img, mask)
+% Same as extract_features.m
+f = []; names = {};
+
+% ---- Colour features (inside the mask only) ----
+lab = rgb2lab(img);  hsv = rgb2hsv(img);
+chans = {lab(:,:,1), lab(:,:,2), lab(:,:,3), hsv(:,:,2), hsv(:,:,3)};
+cn    = {'L', 'a', 'b', 'S', 'V'};
+for k = 1:5
+    v = chans{k}(mask);
+    f(end+1) = mean(v);  names{end+1} = ['mean_' cn{k}];
+    f(end+1) = std(v);   names{end+1} = ['std_'  cn{k}];
+end
+
+% Fraction of fruit pixels that are green / yellow / red-orange
+H = hsv(:,:,1);  S = hsv(:,:,2);
+Hm = H(mask);    Sm = S(mask);
+f(end+1) = mean(Hm >= 0.17 & Hm < 0.45 & Sm > 0.2);  names{end+1} = 'frac_green';
+f(end+1) = mean(Hm >= 0.08 & Hm < 0.17 & Sm > 0.2);  names{end+1} = 'frac_yellow';
+f(end+1) = mean((Hm < 0.08 | Hm > 0.95) & Sm > 0.2); names{end+1} = 'frac_red';
+
+% ---- Texture features ----
+gray = rgb2gray(img);
+ent = entropyfilt(gray);                    % local entropy map
+f(end+1) = mean(ent(mask));  names{end+1} = 'mean_entropy';
+
+stats = regionprops(mask, 'BoundingBox', 'Area', 'Eccentricity', ...
+    'Solidity', 'Extent');
+bb = round(stats(1).BoundingBox);
+crop = gray(bb(2):bb(2)+bb(4)-1, bb(1):bb(1)+bb(3)-1);
+cm   = mask(bb(2):bb(2)+bb(4)-1, bb(1):bb(1)+bb(3)-1);
+crop(~cm) = uint8(mean(crop(cm)));          % neutral fill outside fruit
+glcm = graycomatrix(crop, 'NumLevels', 32, 'Offset', [0 1; -1 1; -1 0; -1 -1]);
+gp = graycoprops(glcm, {'Contrast', 'Homogeneity', 'Energy'});
+f(end+1) = mean(gp.Contrast);     names{end+1} = 'glcm_contrast';
+f(end+1) = mean(gp.Homogeneity);  names{end+1} = 'glcm_homogeneity';
+f(end+1) = mean(gp.Energy);       names{end+1} = 'glcm_energy';
+
+% ---- Shape / area features ----
+f(end+1) = stats(1).Area / numel(mask);  names{end+1} = 'area_fraction';
+f(end+1) = stats(1).Eccentricity;        names{end+1} = 'eccentricity';
+f(end+1) = stats(1).Solidity;            names{end+1} = 'solidity';
+f(end+1) = stats(1).Extent;              names{end+1} = 'extent';
+
+[bands, ~] = dft_bands(img);
+f = [f bands];
+names = [names, {'dft_low', 'dft_mid', 'dft_high'}];
+end
+
+
+function [bands, spectrum] = dft_bands(img)
+% Same as dft_bands.m (Unit 2)
+g = im2double(rgb2gray(imresize(img, [256 256])));
+F = fftshift(fft2(g));                  % 2-D DFT, zero frequency moved to the centre
+spectrum = mat2gray(log(1 + abs(F)));   % log scale so the spectrum is visible
+
+P = abs(F).^2;                          % power at each frequency
+P(129,129) = 0;                         % remove DC term (average brightness)
+[X, Y] = meshgrid(1:256, 1:256);
+R = hypot(X - 129, Y - 129);            % distance from centre = spatial frequency
+total = sum(P(:));
+bands = [sum(P(R <= 16)) / total, ...
+    sum(P(R > 16 & R <= 48)) / total, ...
+    sum(P(R > 48)) / total];       % fraction of energy: low, mid, high
+end

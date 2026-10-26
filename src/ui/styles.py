@@ -30,13 +30,55 @@ THEME = {
     "danger": "#FB7185",
 }
 
+# Section themes: same layout and animations, different colours.
+# "home" is the Aurora theme above; the others replace some of its values.
+SECTION_THEMES = {
+    "home": {},
+    "mango": {                  # dark amber / gold
+        "bg": "#0D0A04",
+        "bg_soft": "#141007",
+        "surface": "#17120A",
+        "surface_2": "#201A0E",
+        "border": "#33291A",
+        "border_strong": "#4D3E22",
+        "text": "#FFF5E1",
+        "text_muted": "#A99A7C",
+        "text_faint": "#716552",
+        "accent": "#F5B731",    # gold
+        "accent_2": "#F59E0B",  # amber
+        "accent_3": "#FB923C",  # orange (glow only)
+    },
+    "leaf": {                   # dark forest green
+        "bg": "#040F09",
+        "bg_soft": "#07150D",
+        "surface": "#0A1A11",
+        "surface_2": "#0F2418",
+        "border": "#1A3525",
+        "border_strong": "#285238",
+        "text": "#E6FFEF",
+        "text_muted": "#7FA38D",
+        "text_faint": "#4F7360",
+        "accent": "#4ADE80",    # green
+        "accent_2": "#A3E635",  # lime
+        "accent_3": "#2DD4BF",  # teal (glow only)
+    },
+}
+
 FONT_HEADING = "Syne"
 FONT_BODY = "Manrope"
+
+
+def _rgb(hex_colour: str) -> str:
+    """'#2DD4BF' -> '45, 212, 191'."""
+    h = hex_colour.lstrip("#")
+    return ", ".join(str(int(h[i:i + 2], 16)) for i in (0, 2, 4))
 
 
 def _root_vars() -> str:
     """Build the :root block from THEME so colours live in one place."""
     lines = [f"--cv-{k.replace('_', '-')}: {v};" for k, v in THEME.items()]
+    # "r, g, b" copies so the CSS can use rgba(var(--cv-accent-rgb), 0.2)
+    lines += [f"--cv-{k.replace('_', '-')}-rgb: {_rgb(v)};" for k, v in THEME.items()]
     lines.append(f"--cv-font-heading: '{FONT_HEADING}', 'Segoe UI', sans-serif;")
     lines.append(f"--cv-font-body: '{FONT_BODY}', 'Segoe UI', sans-serif;")
     return ":root {" + "".join(lines) + "}"
@@ -65,9 +107,9 @@ html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"
 .stApp {
     background-color: var(--cv-bg);
     background-image:
-        radial-gradient(60rem 30rem at 10% -10%, rgba(45, 212, 191, 0.10), transparent 60%),
-        radial-gradient(50rem 28rem at 95% 0%, rgba(56, 189, 248, 0.09), transparent 60%),
-        radial-gradient(40rem 30rem at 60% 110%, rgba(129, 140, 248, 0.06), transparent 60%);
+        radial-gradient(60rem 30rem at 10% -10%, rgba(var(--cv-accent-rgb), 0.10), transparent 60%),
+        radial-gradient(50rem 28rem at 95% 0%, rgba(var(--cv-accent-2-rgb), 0.09), transparent 60%),
+        radial-gradient(40rem 30rem at 60% 110%, rgba(var(--cv-accent-3-rgb), 0.06), transparent 60%);
     background-attachment: fixed;
 }
 
@@ -77,7 +119,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"
     position: fixed;
     inset: 0;
     pointer-events: none;
-    background-image: radial-gradient(rgba(230, 240, 255, 0.05) 1px, transparent 1px);
+    background-image: radial-gradient(rgba(var(--cv-text-rgb), 0.05) 1px, transparent 1px);
     background-size: 28px 28px;
     mask-image: linear-gradient(180deg, rgba(0,0,0,0.9), transparent 70%);
     -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,0.9), transparent 70%);
@@ -133,7 +175,7 @@ button[title*="Open sidebar"] {
     margin: 0 !important;
     border: 1px solid var(--cv-border) !important;
     border-radius: 10px !important;
-    background: rgba(13, 21, 38, 0.8) !important;
+    background: rgba(var(--cv-surface-rgb), 0.8) !important;
     color: transparent !important;
     font-size: 0 !important;
     line-height: 0 !important;
@@ -147,8 +189,8 @@ button[aria-label*="Close sidebar"]:hover,
 button[aria-label*="Open sidebar"]:hover,
 button[title*="Close sidebar"]:hover,
 button[title*="Open sidebar"]:hover {
-    background: rgba(45, 212, 191, 0.12) !important;
-    border-color: rgba(45, 212, 191, 0.45) !important;
+    background: rgba(var(--cv-accent-rgb), 0.12) !important;
+    border-color: rgba(var(--cv-accent-rgb), 0.45) !important;
 }
 
 [data-testid="stSidebarCollapseButton"] button > span,
@@ -192,7 +234,7 @@ button[aria-label*="Open sidebar"]::before {
     height: 40px;
     border-radius: 12px;
     background: linear-gradient(135deg, var(--cv-accent), var(--cv-accent-2));
-    box-shadow: 0 0 24px rgba(45, 212, 191, 0.35);
+    box-shadow: 0 0 24px rgba(var(--cv-accent-rgb), 0.35);
     flex-shrink: 0;
     overflow: hidden;
 }
@@ -292,7 +334,7 @@ button[aria-label*="Open sidebar"]::before {
 }
 
 [data-testid="stSidebar"] [data-testid="stRadio"] label:hover {
-    background: rgba(230, 240, 255, 0.04);
+    background: rgba(var(--cv-text-rgb), 0.04);
     transform: translateX(3px);
 }
 
@@ -301,8 +343,8 @@ button[aria-label*="Open sidebar"]::before {
 }
 
 [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
-    background: linear-gradient(90deg, rgba(45, 212, 191, 0.14), rgba(56, 189, 248, 0.04));
-    border-color: rgba(45, 212, 191, 0.30);
+    background: linear-gradient(90deg, rgba(var(--cv-accent-rgb), 0.14), rgba(var(--cv-accent-2-rgb), 0.04));
+    border-color: rgba(var(--cv-accent-rgb), 0.30);
 }
 
 [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked)::after {
@@ -327,7 +369,7 @@ button[aria-label*="Open sidebar"]::before {
     margin-top: 1.75rem;
     padding: 1rem;
     border-radius: 14px;
-    background: rgba(13, 21, 38, 0.7);
+    background: rgba(var(--cv-surface-rgb), 0.7);
     border: 1px solid var(--cv-border);
     animation: cvRise 0.6s 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
@@ -366,8 +408,8 @@ button[aria-label*="Open sidebar"]::before {
     color: var(--cv-accent);
     padding: 0.4rem 0.8rem;
     border-radius: 999px;
-    background: rgba(45, 212, 191, 0.08);
-    border: 1px solid rgba(45, 212, 191, 0.22);
+    background: rgba(var(--cv-accent-rgb), 0.08);
+    border: 1px solid rgba(var(--cv-accent-rgb), 0.22);
     animation: cvRise 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
@@ -433,7 +475,7 @@ button[aria-label*="Open sidebar"]::before {
 
 .cv-dot.on {
     background: var(--cv-accent);
-    box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.6);
+    box-shadow: 0 0 0 0 rgba(var(--cv-accent-rgb), 0.6);
     animation: cvPulse 2s ease-out infinite;
 }
 
@@ -466,7 +508,7 @@ button[aria-label*="Open sidebar"]::before {
 .cv-card,
 div[class*="st-key-card_"] {
     position: relative;
-    background: linear-gradient(180deg, rgba(17, 28, 51, 0.75) 0%, rgba(13, 21, 38, 0.75) 100%);
+    background: linear-gradient(180deg, rgba(var(--cv-surface-2-rgb), 0.75) 0%, rgba(var(--cv-surface-rgb), 0.75) 100%);
     border: 1px solid var(--cv-border);
     border-radius: 18px;
     padding: 1.4rem 1.5rem;
@@ -496,7 +538,7 @@ div[class*="st-key-card_"]::before {
 .cv-card:hover,
 div[class*="st-key-card_"]:hover {
     transform: translateY(-3px);
-    box-shadow: 0 18px 40px -18px rgba(45, 212, 191, 0.25), 0 0 0 1px rgba(45, 212, 191, 0.05);
+    box-shadow: 0 18px 40px -18px rgba(var(--cv-accent-rgb), 0.25), 0 0 0 1px rgba(var(--cv-accent-rgb), 0.05);
 }
 
 .cv-card:hover::before,
@@ -644,8 +686,8 @@ div[class*="st-key-card_"]:hover::before {
 
 .cv-tag.live {
     color: var(--cv-accent);
-    background: rgba(45, 212, 191, 0.08);
-    border-color: rgba(45, 212, 191, 0.25);
+    background: rgba(var(--cv-accent-rgb), 0.08);
+    border-color: rgba(var(--cv-accent-rgb), 0.25);
 }
 
 /* Empty slot: grid + shimmer sweep */
@@ -657,8 +699,8 @@ div[class*="st-key-card_"]:hover::before {
     border: 1px dashed var(--cv-border-strong);
     background-color: var(--cv-surface-2);
     background-image:
-        linear-gradient(rgba(230, 240, 255, 0.035) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(230, 240, 255, 0.035) 1px, transparent 1px);
+        linear-gradient(rgba(var(--cv-text-rgb), 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(var(--cv-text-rgb), 0.035) 1px, transparent 1px);
     background-size: 22px 22px;
     display: flex;
     flex-direction: column;
@@ -674,7 +716,7 @@ div[class*="st-key-card_"]:hover::before {
     content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(105deg, transparent 30%, rgba(56, 189, 248, 0.08) 45%, rgba(45, 212, 191, 0.12) 50%, transparent 65%);
+    background: linear-gradient(105deg, transparent 30%, rgba(var(--cv-accent-2-rgb), 0.08) 45%, rgba(var(--cv-accent-rgb), 0.12) 50%, transparent 65%);
     transform: translateX(-100%);
     animation: cvShimmer 2.6s ease-in-out infinite;
 }
@@ -727,16 +769,16 @@ div[class*="st-key-card_"] [data-testid="stImage"] img {
 /* ==================== FILE UPLOADER ==================== */
 [data-testid="stFileUploaderDropzone"] {
     position: relative;
-    border: 1.5px dashed rgba(45, 212, 191, 0.4) !important;
+    border: 1.5px dashed rgba(var(--cv-accent-rgb), 0.4) !important;
     border-radius: 14px !important;
-    background: rgba(45, 212, 191, 0.04) !important;
+    background: rgba(var(--cv-accent-rgb), 0.04) !important;
     padding: 1.6rem 1.2rem !important;
     transition: border-color 0.3s ease, background 0.3s ease, transform 0.3s ease !important;
 }
 
 [data-testid="stFileUploaderDropzone"]:hover {
     border-color: var(--cv-accent) !important;
-    background: rgba(45, 212, 191, 0.08) !important;
+    background: rgba(var(--cv-accent-rgb), 0.08) !important;
     transform: scale(1.01);
 }
 
@@ -747,7 +789,7 @@ div[class*="st-key-card_"] [data-testid="stImage"] img {
 
 [data-testid="stFileUploaderDropzone"] button {
     border-radius: 10px !important;
-    border: 1px solid rgba(45, 212, 191, 0.4) !important;
+    border: 1px solid rgba(var(--cv-accent-rgb), 0.4) !important;
     background: transparent !important;
     color: var(--cv-accent) !important;
     font-weight: 600 !important;
@@ -772,7 +814,7 @@ div[class*="st-key-card_"] [data-testid="stImage"] img {
 
 [data-testid="stSelectbox"] [data-baseweb="select"] > div:focus-within {
     border-color: var(--cv-accent) !important;
-    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.15) !important;
+    box-shadow: 0 0 0 3px rgba(var(--cv-accent-rgb), 0.15) !important;
 }
 
 [data-baseweb="popover"] ul {
@@ -783,7 +825,7 @@ div[class*="st-key-card_"] [data-testid="stImage"] img {
 
 [data-baseweb="popover"] li:hover,
 [data-baseweb="popover"] li[aria-selected="true"] {
-    background: rgba(45, 212, 191, 0.10) !important;
+    background: rgba(var(--cv-accent-rgb), 0.10) !important;
 }
 
 [data-testid="stWidgetLabel"] p {
@@ -810,7 +852,7 @@ div[class*="st-key-card_"] [data-testid="stImage"] img {
     border: none !important;
     color: #04121A !important;
     background: linear-gradient(110deg, var(--cv-accent) 0%, var(--cv-accent-2) 100%) !important;
-    box-shadow: 0 10px 30px -12px rgba(45, 212, 191, 0.7) !important;
+    box-shadow: 0 10px 30px -12px rgba(var(--cv-accent-rgb), 0.7) !important;
 }
 
 [data-testid="stBaseButton-primary"] p {
@@ -833,7 +875,7 @@ div[class*="st-key-card_"] [data-testid="stImage"] img {
 
 [data-testid="stBaseButton-primary"]:hover {
     transform: translateY(-2px);
-    box-shadow: 0 16px 36px -12px rgba(56, 189, 248, 0.75) !important;
+    box-shadow: 0 16px 36px -12px rgba(var(--cv-accent-2-rgb), 0.75) !important;
 }
 
 [data-testid="stBaseButton-primary"]:hover::after {
@@ -851,7 +893,7 @@ div[class*="st-key-card_"] [data-testid="stImage"] img {
 }
 
 [data-testid="stBaseButton-secondary"]:hover {
-    border-color: rgba(45, 212, 191, 0.45) !important;
+    border-color: rgba(var(--cv-accent-rgb), 0.45) !important;
     color: var(--cv-accent) !important;
     transform: translateY(-1px);
 }
@@ -903,7 +945,7 @@ button:disabled,
 
 .cv-check.done i {
     border-color: var(--cv-accent);
-    background: rgba(45, 212, 191, 0.15);
+    background: rgba(var(--cv-accent-rgb), 0.15);
 }
 
 .cv-check.done i::after {
@@ -961,13 +1003,13 @@ button:disabled,
     margin-top: 0.2rem;
 }
 
-.cv-stage.s-not .cv-stage-bar { background: linear-gradient(90deg, var(--cv-accent-2), rgba(56, 189, 248, 0.2)); }
-.cv-stage.s-ready .cv-stage-bar { background: linear-gradient(90deg, var(--cv-accent), rgba(45, 212, 191, 0.2)); }
+.cv-stage.s-not .cv-stage-bar { background: linear-gradient(90deg, var(--cv-accent-2), rgba(var(--cv-accent-2-rgb), 0.2)); }
+.cv-stage.s-ready .cv-stage-bar { background: linear-gradient(90deg, var(--cv-accent), rgba(var(--cv-accent-rgb), 0.2)); }
 .cv-stage.s-over .cv-stage-bar { background: linear-gradient(90deg, var(--cv-danger), rgba(251, 113, 133, 0.2)); }
 
 .cv-stage.active {
     border-color: var(--cv-accent);
-    box-shadow: 0 0 0 1px var(--cv-accent), 0 18px 40px -18px rgba(45, 212, 191, 0.5);
+    box-shadow: 0 0 0 1px var(--cv-accent), 0 18px 40px -18px rgba(var(--cv-accent-rgb), 0.5);
 }
 
 .cv-stage.active .cv-stage-name { color: var(--cv-text); }
@@ -1029,7 +1071,7 @@ button:disabled,
 
 .cv-notice b { color: var(--cv-warning); }
 
-.cv-notice.info { border-color: rgba(45, 212, 191, 0.25); background: rgba(45, 212, 191, 0.06); }
+.cv-notice.info { border-color: rgba(var(--cv-accent-rgb), 0.25); background: rgba(var(--cv-accent-rgb), 0.06); }
 .cv-notice.info .cv-bar { background: var(--cv-accent); }
 .cv-notice.info b { color: var(--cv-accent); }
 
@@ -1076,7 +1118,7 @@ button:disabled,
 
 [data-testid="stToast"] {
     background: var(--cv-surface-2) !important;
-    border: 1px solid rgba(45, 212, 191, 0.3) !important;
+    border: 1px solid rgba(var(--cv-accent-rgb), 0.3) !important;
     border-radius: 14px !important;
     color: var(--cv-text) !important;
 }
@@ -1100,7 +1142,147 @@ button:disabled,
 ::-webkit-scrollbar-thumb { background: var(--cv-border-strong); border-radius: 8px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--cv-accent); }
 
+/* ==================== HOME (section chooser) ==================== */
+.stApp { transition: background-color 0.6s ease; }
+
+div[class*="st-key-card_choose_"] {
+    padding: 1.8rem 1.8rem 1.5rem 1.8rem;
+    min-height: 100%;
+    background:
+        radial-gradient(22rem 14rem at 100% 0%, rgba(var(--cv-accent-rgb), 0.16), transparent 70%),
+        linear-gradient(180deg, rgba(var(--cv-surface-2-rgb), 0.9) 0%, rgba(var(--cv-surface-rgb), 0.9) 100%);
+    border-color: rgba(var(--cv-accent-rgb), 0.22);
+}
+
+div[class*="st-key-card_choose_"]:hover {
+    transform: translateY(-6px);
+    box-shadow: 0 26px 60px -24px rgba(var(--cv-accent-rgb), 0.45);
+}
+
+.cv-orb {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    margin-bottom: 1.3rem;
+    background: radial-gradient(circle at 32% 30%, #fff8 0%, var(--cv-accent) 28%, var(--cv-accent-2) 70%, rgba(var(--cv-accent-2-rgb), 0.4) 100%);
+    box-shadow: 0 0 36px rgba(var(--cv-accent-rgb), 0.45);
+    animation: cvFloat 4.5s ease-in-out infinite;
+}
+
+.cv-orb.leaf { border-radius: 0 60% 0 60%; }
+
+.cv-orb::after {
+    content: "";
+    position: absolute;
+    inset: -8px;
+    border-radius: inherit;
+    border: 1px solid rgba(var(--cv-accent-rgb), 0.35);
+    animation: cvRing 2.6s ease-out infinite;
+}
+
+.cv-choose-kicker {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--cv-accent);
+}
+
+.cv-choose-title {
+    font-family: var(--cv-font-heading);
+    font-weight: 800;
+    font-size: 1.9rem;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+    color: var(--cv-text);
+    margin: 0.35rem 0 0.6rem 0;
+}
+
+.cv-choose-text {
+    font-size: 0.92rem;
+    color: var(--cv-text-muted);
+    line-height: 1.6;
+    margin-bottom: 1rem;
+}
+
+.cv-choose-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin-bottom: 1.4rem;
+}
+
+.cv-choose-list span {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--cv-text-muted);
+    padding: 0.3rem 0.65rem;
+    border-radius: 999px;
+    border: 1px solid rgba(var(--cv-accent-rgb), 0.25);
+    background: rgba(var(--cv-accent-rgb), 0.06);
+}
+
+[data-testid="stColumn"]:nth-child(2) div[class*="st-key-card_choose_"] { animation-delay: 0.15s; }
+
+/* Newer Streamlit versions build radios and tabs differently: keep the
+   nav on one row without the radio circle, and colour the native accents */
+[data-testid="stSidebar"] [data-testid="stRadioOption"] {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stRadioOption"] > div > div:first-child:not([data-testid]) {
+    display: none !important;
+}
+
+[data-testid="stTab"] .react-aria-SelectionIndicator {
+    background: linear-gradient(90deg, var(--cv-accent), var(--cv-accent-2)) !important;
+}
+
+[data-testid="stTab"][aria-selected="true"] p {
+    color: var(--cv-text) !important;
+}
+
+/* Leaf tissue composition bar: segments grow in from the left */
+.cv-tissue {
+    display: flex;
+    height: 22px;
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 0.4rem 0 0.8rem 0;
+    border: 1px solid var(--cv-border);
+    transform-origin: left center;
+    animation: cvGrow 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Small caption under an image in the "Other transforms" tab */
+.cv-caption {
+    margin-top: 0.6rem;
+    font-size: 0.8rem;
+    color: var(--cv-text-muted);
+    line-height: 1.5;
+}
+
+.cv-caption b { color: var(--cv-accent); font-weight: 700; }
+
 /* ==================== KEYFRAMES ==================== */
+@keyframes cvGrow {
+    from { transform: scaleX(0); opacity: 0.4; }
+    to   { transform: scaleX(1); opacity: 1; }
+}
+
+@keyframes cvFloat {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-6px); }
+}
+
+@keyframes cvRing {
+    from { transform: scale(0.9); opacity: 0.9; }
+    to   { transform: scale(1.35); opacity: 0; }
+}
+
 @keyframes cvRise {
     from { opacity: 0; transform: translateY(14px); filter: blur(4px); }
     to   { opacity: 1; transform: translateY(0);    filter: blur(0); }
@@ -1125,9 +1307,9 @@ button:disabled,
 }
 
 @keyframes cvPulse {
-    0%   { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.6); }
-    70%  { box-shadow: 0 0 0 8px rgba(45, 212, 191, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0); }
+    0%   { box-shadow: 0 0 0 0 rgba(var(--cv-accent-rgb), 0.6); }
+    70%  { box-shadow: 0 0 0 8px rgba(var(--cv-accent-rgb), 0); }
+    100% { box-shadow: 0 0 0 0 rgba(var(--cv-accent-rgb), 0); }
 }
 
 @keyframes cvSpin {
@@ -1158,6 +1340,28 @@ button:disabled,
 def load_global_css():
     """Inject theme variables and global CSS."""
     st.markdown(f"<style>{_root_vars()}{_CSS}</style>", unsafe_allow_html=True)
+
+
+def _theme_vars(colours: dict) -> str:
+    """CSS custom properties (plus -rgb copies) for the given colours."""
+    return "".join(
+        f"--cv-{k.replace('_', '-')}: {v};--cv-{k.replace('_', '-')}-rgb: {_rgb(v)};"
+        for k, v in colours.items()
+    )
+
+
+def apply_section_theme(section: str):
+    """Recolour the app for a section: 'home', 'mango' or 'leaf'."""
+    colours = SECTION_THEMES.get(section) or {}
+    # The home cards preview the colours of the section they open
+    previews = "".join(
+        f"div.st-key-card_choose_{name} {{{_theme_vars(SECTION_THEMES[name])}}}"
+        for name in ("mango", "leaf")
+    )
+    st.markdown(
+        f"<style>:root {{{_theme_vars(colours)}}}{previews}</style>",
+        unsafe_allow_html=True,
+    )
 
 
 def section_divider():
