@@ -54,7 +54,7 @@ ENTRY = {
 
 # Bump together with out.version in crop_pipeline.m / run_leaf_dashboard.m;
 # older saved results are re-run.
-PIPELINE_VERSION = {"fruit": 6, "leaf": 2}
+PIPELINE_VERSION = {"fruit": 7, "leaf": 2}
 
 # How long to wait for the watcher to produce results, and how fresh the
 # heartbeat must be for us to believe the watcher is running.

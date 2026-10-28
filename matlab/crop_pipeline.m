@@ -72,42 +72,104 @@ stages = save_stage(stages, outDir, label2rgb(cluster_map), 'clusters', 'K-means
     'k-means (k = 4) on a*, b* and distance from the centre', 'enhanced');
 
 % ======================= 6. INITIAL MASK =======================
-% A ripening mango is not one colour (red top, yellow-green bottom), so
-% keeping a single cluster keeps only part of the fruit. Instead:
-%  1. a cluster that covers much of the image border is background;
-%  2. a cluster whose chromaticity (a*, b*) is close to the background's is
-%     a shadow or reflection: shadows change lightness L*, not colour;
-%  3. the fruit is the union of all remaining clusters.
+% Which clusters are fruit depends on the background.
 k = max(cluster_map(:));
 border = false(rows, cols);
 border([1 end], :) = true;  border(:, [1 end]) = true;
-contact = zeros(1, k);
-for c = 1:k
-    contact(c) = nnz(cluster_map(border) == c) / nnz(border);
-end
-isBg = contact > 0.15;
-if ~any(isBg), [~, c] = max(contact); isBg(c) = true; end
 
-bgPix = ismember(cluster_map, find(isBg));
-bgAB  = [mean(a(bgPix)), mean(b(bgPix))];
-for c = find(~isBg)
-    m = (cluster_map == c);
-    if hypot(mean(a(m)) - bgAB(1), mean(b(m)) - bgAB(2)) < 10
-        isBg(c) = true;    % same colour as the background, only darker/lighter
+% Is the background plain? Spread of the border chromaticity (a*, b*)
+% around its median: a few units for a studio backdrop, 15+ for foliage.
+bAB = [a(border), b(border)];
+spread = median(hypot(bAB(:,1) - median(bAB(:,1)), bAB(:,2) - median(bAB(:,2))));
+cluttered = spread > 8;
+
+if ~cluttered
+    % Plain background. A ripening mango is not one colour (red top,
+    % yellow-green bottom), so keeping a single cluster keeps only part of
+    % the fruit. Instead:
+    %  1. a cluster that covers much of the image border is background;
+    %  2. a cluster whose chromaticity (a*, b*) is close to the background's
+    %     is a shadow or reflection: shadows change lightness L*, not colour;
+    %  3. the fruit is the union of all remaining clusters.
+    contact = zeros(1, k);
+    for c = 1:k
+        contact(c) = nnz(cluster_map(border) == c) / nnz(border);
     end
+    isBg = contact > 0.15;
+    if ~any(isBg), [~, c] = max(contact); isBg(c) = true; end
+
+    bgPix = ismember(cluster_map, find(isBg));
+    bgAB  = [mean(a(bgPix)), mean(b(bgPix))];
+    for c = find(~isBg)
+        m = (cluster_map == c);
+        if hypot(mean(a(m)) - bgAB(1), mean(b(m)) - bgAB(2)) < 10
+            isBg(c) = true;    % same colour as the background, only darker/lighter
+        end
+    end
+    initial_mask = ismember(cluster_map, find(~isBg));
+    maskNote = 'Plain background: clusters that are not border background or shadow';
+else
+    % Cluttered background (leaves, branches, sky): the border has many
+    % colours, so it cannot define "background". Use shape instead: a mango
+    % is a large, compact, convex blob near the middle; leaves and stems are
+    % thin and elongated. Every connected region of every cluster is scored
+    %   score = solidity^2 * circularity * centrality * sqrt(area),
+    % regions touching the border are penalised, and the best one is the
+    % seed. A neighbouring region is added if the union stays convex (the
+    % red and the yellow half of one fruit).
+    r = max(2, round(0.015 * min(rows, cols)));
+    cand = struct('score', {}, 'mask', {}, 'solidity', {});
+    for c = 1:k
+        cc = bwconncomp(imopen(cluster_map == c, strel('disk', r)));
+        for j = 1:cc.NumObjects
+            if numel(cc.PixelIdxList{j}) < 0.01 * rows * cols, continue; end
+            m = false(rows, cols);  m(cc.PixelIdxList{j}) = true;
+            m = imfill(m, 'holes');
+            p = regionprops(m, 'Area', 'Perimeter', 'Solidity', 'Centroid');
+            circ  = min(1, 4 * pi * p.Area / max(p.Perimeter, 1)^2);
+            cen   = hypot(p.Centroid(1) - cols/2, p.Centroid(2) - rows/2) / hypot(cols/2, rows/2);
+            touch = nnz(m & border) / nnz(border);
+            score = p.Solidity^2 * circ * (1 - 0.6 * cen) * sqrt(p.Area / (rows * cols)) ...
+                    * max(0, 1 - 5 * touch);
+            cand(end+1) = struct('score', score, 'mask', m, 'solidity', p.Solidity); %#ok<AGROW>
+        end
+    end
+    if isempty(cand)
+        initial_mask = (cluster_map == mode(cluster_map(dist_center < 0.25)));
+    else
+        [~, order] = sort([cand.score], 'descend');
+        cand = cand(order);
+        initial_mask = cand(1).mask;  sol = cand(1).solidity;
+        for j = 2:numel(cand)
+            if any(any(imdilate(initial_mask, strel('disk', 2)) & cand(j).mask))
+                u = imfill(initial_mask | cand(j).mask, 'holes');
+                us = regionprops(u, 'Solidity');
+                if numel(us) == 1 && us.Solidity >= max(0.85, 0.9 * sol)
+                    initial_mask = u;  sol = us.Solidity;
+                end
+            end
+        end
+    end
+    maskNote = 'Cluttered background: most fruit-shaped region (convex, compact, central)';
 end
 
-initial_mask = ismember(cluster_map, find(~isBg));
 if ~any(initial_mask(:))   % nothing left: fall back to the centre cluster
     initial_mask = (cluster_map == mode(cluster_map(dist_center < 0.25)));
 end
 initial_mask = imfill(initial_mask, 'holes');
 initial_mask = bwareafilt(initial_mask, 1);
 stages = save_stage(stages, outDir, initial_mask, 'initial_mask', 'Initial mask', ...
-    'Clusters that are not border background or shadow, holes filled, largest region kept', 'clusters');
+    [maskNote ', holes filled, largest region kept'], 'clusters');
 
 % ======================= 7. ACTIVE CONTOUR =======================
 refined_mask = activecontour(lab, initial_mask, 100, 'Chan-Vese');
+% Chan-Vese splits the image into two colour regions. On a busy background
+% it can spill into leaves of a similar colour, so if the area changes by
+% more than 40% the contour is not trusted and the initial mask is kept.
+grow = nnz(refined_mask) / max(1, nnz(initial_mask));
+if cluttered && (grow > 1.4 || grow < 0.6)
+    refined_mask = initial_mask;
+end
 stages = save_stage(stages, outDir, refined_mask, 'active_contour', 'Active contour', ...
     'Chan-Vese active contour, 100 iterations on L*a*b*', 'initial_mask', initial_mask);
 
@@ -116,8 +178,14 @@ mask = imopen(refined_mask, strel('disk', 3));
 mask = imclose(mask, strel('disk', 5));
 mask = imfill(mask, 'holes');
 mask = bwareafilt(mask, 1);
+% Opening with a disk about 1/12 of the fruit's diameter removes anything
+% thinner than that still attached to it: stems, stalks, leaf tips.
+eqd = sqrt(4 * nnz(mask) / pi);
+mask = imopen(mask, strel('disk', max(3, round(eqd / 12))));
+mask = imfill(mask, 'holes');
+mask = bwareafilt(mask, 1);
 stages = save_stage(stages, outDir, mask, 'mask', 'Final mask', ...
-    'Opening, closing, hole filling, largest region kept', 'active_contour', refined_mask);
+    'Opening, closing, hole filling, large opening (removes stems), largest region kept', 'active_contour', refined_mask);
 
 % Sanity check: fruit should cover a plausible fraction of the image
 frac = nnz(mask) / numel(mask);
@@ -158,7 +226,7 @@ end
 
 % ======================= SAVE RESULTS =======================
 out = struct();
-out.version = 6;   % 5: mask = all non-background clusters; 6: maturity stage
+out.version = 7;   % 5: mask = all non-background clusters; 6: maturity stage; 7: cluttered backgrounds
 out.ok = ok;
 out.stages = stages;
 out.images = struct();

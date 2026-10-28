@@ -1,7 +1,7 @@
 %% run_mango_training.m  --  press Run. Builds the feature table AND trains the model.
 %
 % Step 1: runs crop_pipeline.m over the mango ripeness dataset -> mango_features.csv
-% Step 2: trains a linear SVM on those features               -> mango_model.mat
+% Step 2: trains a linear SVM on the colour features          -> mango_model.mat
 %
 % DATASET must hold one sub-folder per ripeness stage (for example Unripe,
 % Partially_Ripe, Ripe). The folder names become the stage names in the app.
@@ -11,6 +11,14 @@
 % Default: <repo>\dataset\MangoRipeness. Replace with your own path if it is elsewhere.
 DATASET   = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'dataset', 'MangoRipeness');
 PER_CLASS = 250;      % images per class. 20 for a quick test.
+
+% The classifier uses colour inside the fruit mask only. Shape, texture and
+% DFT features depend on the camera, distance and background (the dataset
+% is studio photos on white), so they do not carry over to photos taken on
+% the tree. Chromaticity (a*, b*), saturation and the hue fractions do.
+% Lightness (L*, V) is left out too: it changes with the lighting.
+COLOUR_FEATURES = {'mean_a', 'std_a', 'mean_b', 'std_b', 'mean_S', 'std_S', ...
+                   'frac_green', 'frac_yellow', 'frac_red'};
 
 %% ------------------------------------------------------------------------
 clc;
@@ -77,9 +85,9 @@ fprintf('\nStep 1 done: %d rows, %d failed segmentation.\n', height(T), failed);
 fprintf('Saved %s\n\n', csvPath);
 
 %% ===================== STEP 2: train the classifier =====================
-X = T{:, 1:end-1};
+featNames = COLOUR_FEATURES;
+X = T{:, featNames};
 y = T.label;
-featNames = T.Properties.VariableNames(1:end-1);
 
 fprintf('Training on %d samples, %d features, %d classes...\n', ...
         size(X,1), size(X,2), numel(categories(y)));

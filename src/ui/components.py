@@ -50,6 +50,8 @@ MATURITY_STAGES = [
     ("s-ready", "Partially ripe", "Colour turning"),
     ("s-over", "Ripe", "Fully coloured"),
 ]
+# Below this SVM confidence (%) the stage is shown as "Uncertain".
+MIN_CONFIDENCE = 60
 _STAGE_SCALE = " · ".join(name for _, name, _ in MATURITY_STAGES)
 # Stages of the MATLAB chain (crop_pipeline.m), shown as placeholders
 # before the first analysis. Each stage takes the previous one's output.
@@ -213,10 +215,16 @@ def _summarise(raw: dict) -> dict:
 
     m = raw.get("maturity") or {}
     if m.get("stage"):
-        res["maturity"] = _stage_name(m["stage"])
+        stage = _stage_name(m["stage"])
         conf = m.get("confidence")
-        conf = f" · {conf:.0f}% confidence" if isinstance(conf, (int, float)) else ""
-        res["maturity_sub"] = f"Linear SVM (mango_model.mat){conf}"
+        if isinstance(conf, (int, float)) and conf < MIN_CONFIDENCE:
+            # too close between stages to name one
+            res["maturity"] = "Uncertain"
+            res["maturity_sub"] = f"Closest: {stage} · only {conf:.0f}% confidence"
+        else:
+            conf = f" · {conf:.0f}% confidence" if isinstance(conf, (int, float)) else ""
+            res["maturity"] = stage
+            res["maturity_sub"] = f"Linear SVM on colour (mango_model.mat){conf}"
     else:
         res["maturity_sub"] = "No mango_model.mat yet: run run_mango_training.m"
 
