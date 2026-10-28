@@ -74,6 +74,8 @@ Three methods, selected by argument: `'kmeans'` (default), `'border'`, `'auto'`.
    (lightness down-weighted so shading does not dominate hue).
    Fitted on a random 20,000-pixel subset for speed, then all pixels assigned.
 2. Any cluster occupying **more than 15% of the image border** is background.
+   A cluster whose mean a\*, b\* is within 8 of the background's is a cast
+   shadow (shadows change L\*, not chromaticity) and is background too.
 3. **Leaf = union of all remaining clusters.**
 4. Morphology: opening (disk 3) → largest blob → closing (disk 5) → hole fill.
 

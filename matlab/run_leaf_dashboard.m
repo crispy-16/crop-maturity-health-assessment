@@ -133,6 +133,7 @@ end
 
 
 function jsonPath = write_json(out, outDir)
+out.version = 2;   % bump with LEAF_VERSION in matlab_bridge.py; 2: shadow removal
 jsonPath = fullfile(outDir, 'results.json');
 fid = fopen(jsonPath, 'w');
 fwrite(fid, jsonencode(out, 'PrettyPrint', true), 'char');

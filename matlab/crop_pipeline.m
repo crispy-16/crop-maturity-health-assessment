@@ -5,6 +5,7 @@
 %   -> k-means cluster map -> initial mask -> active contour
 %   -> final mask -> segmented fruit                                (segmentation)
 %   -> colour / texture / shape / DFT features                      (Units 1-2)
+%   -> maturity stage (linear SVM, mango_model.mat from run_mango_training.m)
 %
 % Dashboard:  jsonPath = crop_pipeline(imagePath, outDir)
 %   saves every stage as NN_<key>.png in outDir and writes results.json.
@@ -71,16 +72,39 @@ stages = save_stage(stages, outDir, label2rgb(cluster_map), 'clusters', 'K-means
     'k-means (k = 4) on a*, b* and distance from the centre', 'enhanced');
 
 % ======================= 6. INITIAL MASK =======================
-% The cluster that covers most of the image centre is the mango
-center_mask = dist_center < 0.25;
-center_clusters = cluster_map(center_mask);
-mango_cluster = mode(center_clusters);
+% A ripening mango is not one colour (red top, yellow-green bottom), so
+% keeping a single cluster keeps only part of the fruit. Instead:
+%  1. a cluster that covers much of the image border is background;
+%  2. a cluster whose chromaticity (a*, b*) is close to the background's is
+%     a shadow or reflection: shadows change lightness L*, not colour;
+%  3. the fruit is the union of all remaining clusters.
+k = max(cluster_map(:));
+border = false(rows, cols);
+border([1 end], :) = true;  border(:, [1 end]) = true;
+contact = zeros(1, k);
+for c = 1:k
+    contact(c) = nnz(cluster_map(border) == c) / nnz(border);
+end
+isBg = contact > 0.15;
+if ~any(isBg), [~, c] = max(contact); isBg(c) = true; end
 
-initial_mask = (cluster_map == mango_cluster);
+bgPix = ismember(cluster_map, find(isBg));
+bgAB  = [mean(a(bgPix)), mean(b(bgPix))];
+for c = find(~isBg)
+    m = (cluster_map == c);
+    if hypot(mean(a(m)) - bgAB(1), mean(b(m)) - bgAB(2)) < 10
+        isBg(c) = true;    % same colour as the background, only darker/lighter
+    end
+end
+
+initial_mask = ismember(cluster_map, find(~isBg));
+if ~any(initial_mask(:))   % nothing left: fall back to the centre cluster
+    initial_mask = (cluster_map == mode(cluster_map(dist_center < 0.25)));
+end
 initial_mask = imfill(initial_mask, 'holes');
 initial_mask = bwareafilt(initial_mask, 1);
 stages = save_stage(stages, outDir, initial_mask, 'initial_mask', 'Initial mask', ...
-    'Centre cluster, holes filled, largest region kept', 'clusters');
+    'Clusters that are not border background or shadow, holes filled, largest region kept', 'clusters');
 
 % ======================= 7. ACTIVE CONTOUR =======================
 refined_mask = activecontour(lab, initial_mask, 100, 'Chan-Vese');
@@ -114,9 +138,27 @@ if ok
     end
 end
 
+% ======================= 11. MATURITY STAGE =======================
+% Linear SVM trained by run_mango_training.m on the features above
+% (mango_model.mat next to this file). Without it the stage stays empty.
+maturity = struct('stage', '', 'confidence', NaN, 'source', 'none');
+modelFile = fullfile(fileparts(mfilename('fullpath')), 'mango_model.mat');
+if ok && isfile(modelFile)
+    S = load(modelFile);                   % S.mdl, S.featNames
+    x = zeros(1, numel(S.featNames));
+    for k = 1:numel(S.featNames)
+        if isfield(feats, S.featNames{k}), x(k) = feats.(S.featNames{k}); end
+    end
+    [lab, score] = predict(S.mdl, x);
+    s = exp(score - max(score));  s = s / sum(s);   % soft-max over SVM scores
+    maturity.stage = char(string(lab));
+    maturity.confidence = max(s) * 100;
+    maturity.source = 'model';
+end
+
 % ======================= SAVE RESULTS =======================
 out = struct();
-out.version = 4;
+out.version = 6;   % 5: mask = all non-background clusters; 6: maturity stage
 out.ok = ok;
 out.stages = stages;
 out.images = struct();
@@ -124,6 +166,7 @@ for k = 1:numel(stages)
     out.images.(stages(k).key) = stages(k).file;
 end
 out.features = feats;
+out.maturity = maturity;
 
 jsonPath = fullfile(outDir, 'results.json');
 fid = fopen(jsonPath, 'w');

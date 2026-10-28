@@ -19,11 +19,12 @@ channels, edges and so on), each captioned with the transform that made it.
 
 **Mango ripeness** (`crop_pipeline.m`): resize → 3×3 median filter →
 histogram equalisation of V → k-means on a\*, b\* and distance from centre →
-initial mask → Chan-Vese active contour → morphological clean-up →
-segmented fruit → colour, texture, shape and DFT features.
+fruit = clusters that are neither border background nor shadow → Chan-Vese active contour → morphological clean-up →
+segmented fruit → colour, texture, shape and DFT features → maturity stage
+(unripe, partially ripe, ripe) from a linear SVM trained on those features.
 
 **Leaf disease** (`run_leaf_dashboard.m`): resize → 3×3 median filter →
-k-means in L\*a\*b\* (border clusters = background) → opening, closing,
+k-means in L\*a\*b\* (border clusters and shadows = background) → opening, closing,
 hole fill → five tissue classes (healthy, chlorotic, necrotic, powdery,
 sooty) → 41 features → condition, affected area and severity.
 Details: [docs/LEAF_PIPELINE.md](docs/LEAF_PIPELINE.md).
@@ -42,6 +43,7 @@ matlab/                     all MATLAB code
   run_leaf.m                leaf pipeline on one image, with figures
   run_transforms.m          quantisation, 2-D DFT and frequency-domain filter figures
   run_training.m            builds leaf_features.csv and trains leaf_model.mat
+  run_mango_training.m      builds mango_features.csv and trains mango_model.mat
   run_cnn.m  leaf_cnn_demo.m  check_cnn.m  cnn_setup.m  cnn_activations.m
                             optional CNN comparison (Deep Learning Toolbox)
 docs/LEAF_PIPELINE.md       leaf pipeline design notes
@@ -51,9 +53,10 @@ outputs/                    results written by the app (not committed)
 ## Requirements
 
 - MATLAB with the Image Processing Toolbox. The Statistics and Machine
-  Learning Toolbox is needed only to train the leaf classifier
-  (`run_training.m`); without it the leaf condition comes from a rule-based
-  fallback and k-means uses `imsegkmeans`.
+  Learning Toolbox is needed to train and use the classifiers
+  (`run_training.m`, `run_mango_training.m`); without it the leaf condition
+  comes from a rule-based fallback, the mango maturity stage stays empty, and
+  k-means uses `imsegkmeans`.
 - Python 3.10+.
 
 ## Running
@@ -85,8 +88,12 @@ Choose a section on the home screen, upload an image and click
 **Analyze image**. The sidebar shows whether MATLAB is reachable.
 Results are cached per image in `outputs/dashboard/<mode>-<id>/`.
 
-Optional: put MangoLeafBD in `dataset/MangoLeafBD/<Class>/` and run
-`run_training.m` in MATLAB to train the leaf classifier.
+The two trained classifiers (`matlab/leaf_model.mat`, `matlab/mango_model.mat`) are committed, so the app
+classifies straight after cloning. The datasets are not. To retrain in MATLAB:
+
+- Leaf: put MangoLeafBD in `dataset/MangoLeafBD/<Class>/` and run `run_training.m`.
+- Mango: put the ripeness images in `dataset/MangoRipeness/<stage>/`
+  (`unripe`, `pArtially_ripe`, `ripe`) and run `run_mango_training.m`.
 
 ## Scope
 

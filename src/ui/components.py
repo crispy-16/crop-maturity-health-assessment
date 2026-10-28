@@ -43,6 +43,14 @@ SECTIONS = {
         ],
     },
 }
+# Mango maturity stages: (css class, name, hint). The trained SVM
+# (mango_model.mat) returns the dataset folder name, matched to these names.
+MATURITY_STAGES = [
+    ("s-not", "Unripe", "Mostly green skin"),
+    ("s-ready", "Partially ripe", "Colour turning"),
+    ("s-over", "Ripe", "Fully coloured"),
+]
+_STAGE_SCALE = " · ".join(name for _, name, _ in MATURITY_STAGES)
 # Stages of the MATLAB chain (crop_pipeline.m), shown as placeholders
 # before the first analysis. Each stage takes the previous one's output.
 PIPELINE_STAGES = [
@@ -203,6 +211,15 @@ def _summarise(raw: dict) -> dict:
     if f.get("area_fraction") is not None:
         res["fruit_area"] = f"{f['area_fraction'] * 100:.1f}%"
 
+    m = raw.get("maturity") or {}
+    if m.get("stage"):
+        res["maturity"] = _stage_name(m["stage"])
+        conf = m.get("confidence")
+        conf = f" · {conf:.0f}% confidence" if isinstance(conf, (int, float)) else ""
+        res["maturity_sub"] = f"Linear SVM (mango_model.mat){conf}"
+    else:
+        res["maturity_sub"] = "No mango_model.mat yet: run run_mango_training.m"
+
     hues = {
         "green": f.get("frac_green"),
         "yellow": f.get("frac_yellow"),
@@ -214,6 +231,15 @@ def _summarise(raw: dict) -> dict:
         res["maturity_evidence"] = f"{hues[name] * 100:.0f}% {name}"
         res["maturity_evidence_sub"] = "Largest hue class in fruit"
     return res
+
+
+def _stage_name(label: str) -> str:
+    """Dataset folder name (e.g. 'pArtially_ripe') -> stage name in MATURITY_STAGES."""
+    key = "".join(ch for ch in label.lower() if ch.isalpha())
+    for _, name, _ in MATURITY_STAGES:
+        if key == name.lower().replace(" ", ""):
+            return name
+    return label.replace("_", " ").strip().capitalize()
 
 
 def _summarise_leaf(res: dict, f: dict, h: dict):
@@ -618,7 +644,7 @@ def mango_dashboard_page():
     with c1:
         stat_tile("Crop", "Mango", "This section", "accent")
     with c2:
-        stat_tile("Maturity", _result("maturity"), "Not ready · Ready · Overripe", "accent")
+        stat_tile("Maturity", _result("maturity"), _sub("maturity", _STAGE_SCALE), "accent")
     with c3:
         stat_tile("Evidence", _result("maturity_evidence"), _sub("maturity_evidence", "Largest hue class"))
     with c4:
@@ -808,11 +834,7 @@ def maturity_assessment_page():
     _chips()
 
     current = _result("maturity")
-    stages = [
-        ("s-not", "Not ready", "Early development"),
-        ("s-ready", "Ready", "Harvest window"),
-        ("s-over", "Overripe", "Past optimal window"),
-    ]
+    stages = MATURITY_STAGES
     cards = "".join(
         f"""<div class="cv-stage {cls} {'active' if current == name else ''}">
                 <div class="cv-stage-bar"></div>
@@ -828,7 +850,7 @@ def maturity_assessment_page():
     with tab1:
         c1, c2, c3 = st.columns(3, gap="medium")
         with c1:
-            stat_tile("Stage", current, "Assessed maturity", "accent")
+            stat_tile("Stage", current, _sub("maturity", "Assessed maturity"), "accent")
         with c2:
             stat_tile("Crop", _result("crop"), "Analysed crop")
         with c3:

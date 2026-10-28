@@ -19,4 +19,8 @@ outputs/*
 # Leaf pipeline: dataset, training outputs and the trained model are regenerable
 dataset/
 leaf_features.csv
+mango_features.csv
 *.mat
+# ...except the two trained classifiers, so a fresh clone works without retraining
+!matlab/leaf_model.mat
+!matlab/mango_model.mat

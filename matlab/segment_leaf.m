@@ -89,6 +89,7 @@ function [mask, stages] = seg_kmeans(den)
 K       = 5;          % number of clusters
 BTHR    = 0.15;       % a cluster owning more than this of the border = background
 MAXFIT  = 20000;      % pixels used to FIT the clusters (the rest are assigned)
+SHADOW_AB = 8;        % a*b* distance below which a cluster counts as background shadow
 
 lab = rgb2lab(den);
 [h, w, ~] = size(lab);
@@ -123,13 +124,27 @@ end
 cmap = reshape(idx, h, w);
 
 % ---- which clusters are background? -----------------------------------
-leaf = false(h, w);
+isBg = false(1, K);
 for c = 1:K
-    m = (cmap == c);
-    if border_contact(m) <= BTHR
-        leaf = leaf | m;
+    isBg(c) = border_contact(cmap == c) > BTHR;
+end
+
+% A cast shadow has the background's colour, only darker: it changes L*
+% but hardly moves a* and b*. So a cluster whose mean chromaticity is close
+% to the background's is shadow, not leaf. Dark lesions inside the leaf
+% that this removes come back with the hole filling below.
+if any(isBg)
+    bg = ismember(cmap, find(isBg));
+    A = lab(:,:,2);  B = lab(:,:,3);
+    bgAB = [mean(A(bg)), mean(B(bg))];
+    for c = find(~isBg)
+        m = (cmap == c);
+        if hypot(mean(A(m)) - bgAB(1), mean(B(m)) - bgAB(2)) < SHADOW_AB
+            isBg(c) = true;
+        end
     end
 end
+leaf = ismember(cmap, find(~isBg));
 
 if ~any(leaf(:))
     % every cluster reaches the border - keep the one that reaches least

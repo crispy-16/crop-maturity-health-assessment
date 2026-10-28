@@ -45,8 +45,9 @@ ENTRY = {
     "leaf": "run_leaf_dashboard",
 }
 
-# Bump together with out.version in crop_pipeline.m; older saved results are re-run.
-PIPELINE_VERSION = 4
+# Bump together with out.version in crop_pipeline.m / run_leaf_dashboard.m;
+# older saved results are re-run.
+PIPELINE_VERSION = {"fruit": 6, "leaf": 2}
 
 # How long to wait for the watcher to produce results, and how fresh the
 # heartbeat must be for us to believe the watcher is running.
@@ -212,7 +213,8 @@ def run_analysis(image_bytes: bytes, image_name: str, mode: str = "fruit") -> di
     Run one MATLAB pipeline on one image and return its results:
     {"ok", "mode", "backend", "output_dir", "images": {key: path},
      "features": {name: float},
-     "stages": [{key, title, operation, input, path, change_path}, ...]  (fruit),
+     "stages": [{key, title, operation, input, path, change_path}, ...],
+     "maturity": {stage, confidence, source}  (fruit),
      "health": {...}, "segment": {...}  (leaf)}
     Results for an image already analysed in the same mode are reused.
     """
@@ -280,6 +282,7 @@ def run_analysis(image_bytes: bytes, image_name: str, mode: str = "fruit") -> di
         "features": _as_dict(data.get("features")),
         "health": _as_dict(data.get("health")),
         "segment": _as_dict(data.get("segment")),
+        "maturity": _as_dict(data.get("maturity")),
     }
 
 
@@ -290,11 +293,11 @@ def _change_path(out_dir: Path, stage: dict) -> Optional[str]:
 
 
 def _is_current(json_path: Path, mode: str) -> bool:
-    """True if results.json exists (and, for the fruit pipeline, is this version)."""
+    """True if results.json exists and was written by this pipeline version."""
     if not json_path.is_file():
         return False
     try:
         data = json.loads(json_path.read_text(encoding="utf-8"))
     except ValueError:
         return False
-    return mode != "fruit" or data.get("version") == PIPELINE_VERSION
+    return data.get("version") == PIPELINE_VERSION[mode]
