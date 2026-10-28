@@ -498,7 +498,7 @@ def render_sidebar(section: str) -> str:
                 <div class="cv-side-label" style="margin-left:0">MATLAB</div>
                 <div class="cv-session-row">
                     <span>{escape(bs['backend'])}</span>
-                    <b>{'Ready' if bs['ready'] else 'Not ready'}</b>
+                    <b>{'Ready' if bs['ready'] else 'Starting' if bs['detail'].startswith('Opening') else 'Not ready'}</b>
                 </div>
                 <div class="cv-stat-sub" style="margin-top:0.35rem">{escape(bs['detail'])}</div>
             </div>

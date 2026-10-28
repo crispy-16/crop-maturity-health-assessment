@@ -12,11 +12,14 @@ Two ways of reaching MATLAB, chosen automatically:
 
     engine   MATLAB Engine for Python is installed: call MATLAB directly.
     watcher  No Engine: write the image plus a small .job file into
-             outputs/queue/ and wait for matlab/watch_leaf.m (which the
-             user leaves running in MATLAB) to write results.json.
+             outputs/queue/ and wait for matlab/watch_leaf.m to write
+             results.json. One watcher serves both sections. If it is not
+             running, the app opens MATLAB with watch_leaf itself.
 
 Set CROPVISION_BACKEND=engine or =watcher to force one.
 Set CROPVISION_ROOT to override where the project root is.
+Set CROPVISION_MATLAB to the full path of matlab.exe if it is not found.
+Set CROPVISION_AUTOSTART=0 to start the watcher by hand instead.
 
 Folder layout (the project root is found automatically):
 
@@ -28,9 +31,13 @@ Folder layout (the project root is found automatically):
 The root can be this repo itself (it has a matlab/ folder) or a folder above it.
 """
 
+import glob
 import hashlib
 import json
 import os
+import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -54,6 +61,8 @@ PIPELINE_VERSION = {"fruit": 6, "leaf": 2}
 WATCH_TIMEOUT = 300.0
 WATCH_POLL = 0.3
 HEARTBEAT_MAX_AGE = 20.0
+# MATLAB takes up to a minute or two to open; don't launch it twice meanwhile.
+WATCHER_START_GRACE = 150.0
 
 
 class BackendError(RuntimeError):
@@ -96,6 +105,58 @@ def watcher_alive(root: Path) -> bool:
         return False
 
 
+def _find_matlab() -> Optional[str]:
+    """Path of the MATLAB launcher, or None if MATLAB is not installed."""
+    env = os.environ.get("CROPVISION_MATLAB")
+    if env and Path(env).is_file():
+        return env
+    found = shutil.which("matlab")
+    if found:
+        return found
+    pattern = r"C:\Program Files\MATLAB\R*\bin\matlab.exe"
+    installs = sorted(glob.glob(pattern))     # R2025b < R2026a, newest last
+    return installs[-1] if installs else None
+
+
+def start_watcher(root: Path) -> str:
+    """
+    Make sure watch_leaf.m is running. Returns "running", "starting"
+    (MATLAB was opened and is still loading) or "manual" (could not start it).
+    """
+    if watcher_alive(root):
+        return "running"
+    if (os.environ.get("CROPVISION_AUTOSTART") or "1").strip() == "0":
+        return "manual"
+
+    # A marker file, so a page refresh or a second browser tab does not open
+    # a second MATLAB while the first one is still loading.
+    marker = root / "outputs" / "queue" / "watcher.starting"
+    try:
+        if time.time() - marker.stat().st_mtime < WATCHER_START_GRACE:
+            return "starting"
+    except OSError:
+        pass
+
+    exe = _find_matlab()
+    if exe is None:
+        return "manual"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) if sys.platform == "win32" else 0
+    try:
+        # Opens the normal MATLAB window, in matlab/, running watch_leaf.
+        subprocess.Popen(
+            [exe, "-sd", str(root / "matlab"), "-r", "watch_leaf"],
+            cwd=str(root / "matlab"),
+            creationflags=flags,
+            close_fds=True,
+        )
+    except OSError:
+        marker.unlink(missing_ok=True)
+        return "manual"
+    return "starting"
+
+
 def chosen_backend(root: Path) -> str:
     """Which route to MATLAB to use: 'engine' or 'watcher'."""
     forced = (os.environ.get("CROPVISION_BACKEND") or "").strip().lower()
@@ -118,12 +179,13 @@ def backend_status(root: Optional[Path] = None) -> dict:
             "ready": ok,
             "detail": "MATLAB Engine" if ok else "MATLAB Engine not importable",
         }
-    ok = watcher_alive(root)
-    return {
-        "backend": "watcher",
-        "ready": ok,
-        "detail": "MATLAB watcher running" if ok else "Run matlab/watch_leaf.m in MATLAB",
-    }
+    state = start_watcher(root)
+    detail = {
+        "running": "MATLAB watcher running",
+        "starting": "Opening MATLAB with the watcher (about a minute)",
+        "manual": "Run matlab/watch_leaf.m in MATLAB",
+    }[state]
+    return {"backend": "watcher", "ready": state == "running", "detail": detail}
 
 
 # ----------------------------------------------------------------- engine
@@ -160,6 +222,11 @@ def _run_via_watcher(root: Path, job_name: str, out_dir: Path) -> Path:
     queue_dir = root / "outputs" / "queue"
     queue_dir.mkdir(parents=True, exist_ok=True)
 
+    if start_watcher(root) == "starting":
+        # MATLAB was just opened: wait for its first heartbeat
+        deadline = time.time() + WATCHER_START_GRACE
+        while not watcher_alive(root) and time.time() < deadline:
+            time.sleep(1.0)
     if not watcher_alive(root):
         raise BackendError(
             "The MATLAB watcher is not running.\n\n"
